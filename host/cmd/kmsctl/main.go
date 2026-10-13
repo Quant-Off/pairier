@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Quant-Off/pairier/host/internal/api"
 	"github.com/Quant-Off/pairier/host/internal/node"
 	"github.com/Quant-Off/pairier/host/internal/wire"
 )
@@ -30,6 +31,11 @@ commands:
   key info --id KEYID
   key send --id KEYID --to MEMBER [--usage decrypt] [--out FILE]
   key receive --in FILE
+  key push --id KEYID --to MEMBER --url https://HOST:PORT [--usage decrypt]
+  inbox list
+  inbox accept --id ENVELOPEID
+  inbox reject --id ENVELOPEID
+  peer health --member MEMBER --url https://HOST:PORT
   encrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   decrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   version
@@ -152,8 +158,28 @@ func (c *cli) dispatch(args []string) (int, error) {
 			return c.cmdKeySend(ctx, args[2:])
 		case "receive":
 			return c.cmdKeyReceive(ctx, args[2:])
+		case "push":
+			return c.cmdKeyPush(ctx, args[2:])
 		}
 		return 2, fmt.Errorf("key: unknown subcommand %q", args[1])
+	case "inbox":
+		if len(args) < 2 {
+			return 2, errors.New("inbox: subcommand required (list, accept, reject)")
+		}
+		switch args[1] {
+		case "list":
+			return c.cmdInboxList(ctx, args[2:])
+		case "accept":
+			return c.cmdInboxAccept(ctx, args[2:])
+		case "reject":
+			return c.cmdInboxReject(ctx, args[2:])
+		}
+		return 2, fmt.Errorf("inbox: unknown subcommand %q", args[1])
+	case "peer":
+		if len(args) < 2 || args[1] != "health" {
+			return 2, errors.New("peer: subcommand required (health)")
+		}
+		return c.cmdPeerHealth(ctx, args[2:])
 	case "encrypt":
 		return c.cmdCrypt(ctx, args[1:], true)
 	case "decrypt":
@@ -395,6 +421,120 @@ func (c *cli) cmdKeyReceive(ctx context.Context, args []string) (int, error) {
 		return 1, err
 	}
 	fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\tfrom %s\n", rec.KeyID, algName(rec.Alg), formatUsage(rec.Usage), rec.Label, rec.Origin.Sender)
+	return 0, nil
+}
+
+func (c *cli) cmdKeyPush(ctx context.Context, args []string) (int, error) {
+	fs := c.flags("key push")
+	id := fs.String("id", "", "key id")
+	to := fs.String("to", "", "recipient member id")
+	url := fs.String("url", "", "recipient kmsd base url")
+	usage := fs.String("usage", "decrypt", "usage granted to the recipient")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return 2, errors.New("key push: invalid arguments")
+	}
+	if *id == "" || *to == "" || *url == "" {
+		return 2, errors.New("key push: --id, --to and --url are required")
+	}
+	if !strings.HasPrefix(*url, "https://") {
+		return 2, errors.New("key push: --url must use https")
+	}
+	bits, err := parseUsage(*usage)
+	if err != nil {
+		return 2, err
+	}
+	n, err := c.open(ctx)
+	if err != nil {
+		return 1, err
+	}
+	defer n.Close()
+	env, err := n.Send(ctx, *id, *to, bits)
+	if err != nil {
+		return 1, err
+	}
+	envID, err := api.NewClient(n, nil).Push(ctx, strings.TrimRight(*url, "/"), *to, env)
+	if err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(c.stdout, "pushed\t%s\tto\t%s\tenvelope\t%s\n", *id, *to, envID)
+	return 0, nil
+}
+
+func (c *cli) cmdInboxList(ctx context.Context, args []string) (int, error) {
+	if len(args) != 0 {
+		return 2, errors.New("inbox list: no arguments expected")
+	}
+	n, err := c.open(ctx)
+	if err != nil {
+		return 1, err
+	}
+	defer n.Close()
+	items, err := n.Inbox()
+	if err != nil {
+		return 1, err
+	}
+	for _, it := range items {
+		fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\n", it.ID, it.Sender, time.Unix(it.SentAt, 0).UTC().Format(time.RFC3339), time.Unix(it.ReceivedAt, 0).UTC().Format(time.RFC3339))
+	}
+	return 0, nil
+}
+
+func (c *cli) cmdInboxAccept(ctx context.Context, args []string) (int, error) {
+	fs := c.flags("inbox accept")
+	id := fs.String("id", "", "envelope id")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *id == "" {
+		return 2, errors.New("inbox accept: --id is required")
+	}
+	n, err := c.open(ctx)
+	if err != nil {
+		return 1, err
+	}
+	defer n.Close()
+	rec, err := n.Accept(ctx, *id)
+	if err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\tfrom %s\n", rec.KeyID, algName(rec.Alg), formatUsage(rec.Usage), rec.Label, rec.Origin.Sender)
+	return 0, nil
+}
+
+func (c *cli) cmdInboxReject(ctx context.Context, args []string) (int, error) {
+	fs := c.flags("inbox reject")
+	id := fs.String("id", "", "envelope id")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *id == "" {
+		return 2, errors.New("inbox reject: --id is required")
+	}
+	n, err := c.open(ctx)
+	if err != nil {
+		return 1, err
+	}
+	defer n.Close()
+	if err := n.Reject(ctx, *id); err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(c.stdout, "rejected\t%s\n", *id)
+	return 0, nil
+}
+
+func (c *cli) cmdPeerHealth(ctx context.Context, args []string) (int, error) {
+	fs := c.flags("peer health")
+	member := fs.String("member", "", "member id")
+	url := fs.String("url", "", "member kmsd base url")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *member == "" || *url == "" {
+		return 2, errors.New("peer health: --member and --url are required")
+	}
+	if !strings.HasPrefix(*url, "https://") {
+		return 2, errors.New("peer health: --url must use https")
+	}
+	n, err := c.open(ctx)
+	if err != nil {
+		return 1, err
+	}
+	defer n.Close()
+	if err := api.NewClient(n, nil).Health(ctx, strings.TrimRight(*url, "/"), *member); err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(c.stdout, "ok\t%s\n", *member)
 	return 0, nil
 }
 
