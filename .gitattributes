@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.go text eol=lf
+*.rs text eol=lf
+core/vendor/** linguist-vendored
+host/vendor/** linguist-vendored

@@ -1,0 +1,8 @@
+/core/target/
+/host/bin/
+/dist/
+/.ast-bro/
+*.log
+*.pem
+*.key
+.DS_Store
