@@ -4,6 +4,15 @@ CARGO ?= cargo
 CORE_DIR := core
 HOST_DIR := host
 
+CORE_FEATURES ?= pqc
+FIPS          ?= 0
+ifeq ($(FIPS),1)
+CORE_FLAGS := --no-default-features --features fips,$(CORE_FEATURES)
+else
+CORE_FLAGS := --features $(CORE_FEATURES)
+endif
+KMS_CORE_BIN  := $(abspath $(CORE_DIR)/target/debug/kms-core)
+
 export GOTOOLCHAIN := local
 export GOPROXY     := off
 export GOFLAGS     := -mod=vendor -trimpath
@@ -21,7 +30,7 @@ all: build
 build: build-core build-host
 
 build-core:
-	cd $(CORE_DIR) && $(CARGO) build --release --frozen
+	cd $(CORE_DIR) && $(CARGO) build --release --frozen -p kms-core $(CORE_FLAGS)
 
 build-host:
 	cd $(HOST_DIR) && $(GO) build -o bin/ ./cmd/...
@@ -32,7 +41,8 @@ test-core:
 	cd $(CORE_DIR) && $(CARGO) test --frozen --all-features
 
 test-host:
-	cd $(HOST_DIR) && $(GO) test ./...
+	cd $(CORE_DIR) && $(CARGO) build --frozen -p kms-core --features pqc
+	cd $(HOST_DIR) && KMS_CORE_BIN=$(KMS_CORE_BIN) $(GO) test ./...
 
 lint: lint-core lint-host
 
