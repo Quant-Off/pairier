@@ -41,6 +41,9 @@ print_stderr = "deny"
 as_conversions = "deny"
 large_stack_arrays = "deny"
 missing_docs_in_private_items = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_safety_doc = "allow"
 module_name_repetitions = "allow"
 
 [profile.dev]
