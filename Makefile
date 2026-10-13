@@ -10,7 +10,8 @@ export GOFLAGS     := -mod=vendor -trimpath
 export CGO_ENABLED := 0
 
 RUST_TOOLCHAIN := $(shell sed -n 's/^channel = "\(.*\)"/\1/p' $(CORE_DIR)/rust-toolchain.toml)
-CARGO_NET      := $(CARGO) +$(RUST_TOOLCHAIN) --manifest-path $(CORE_DIR)/Cargo.toml
+CARGO_NET      := $(CARGO) +$(RUST_TOOLCHAIN)
+CORE_MANIFEST  := --manifest-path $(CORE_DIR)/Cargo.toml
 GO_NET         := GOPROXY=https://proxy.golang.org,direct GOFLAGS=-trimpath $(GO)
 
 .PHONY: all build build-core build-host test test-core test-host lint lint-core lint-host fmt vendor update clean
@@ -48,11 +49,11 @@ fmt:
 	cd $(HOST_DIR) && gofmt -w .
 
 vendor:
-	$(CARGO_NET) vendor --locked $(CORE_DIR)/vendor
+	$(CARGO_NET) vendor $(CORE_MANIFEST) --locked $(CORE_DIR)/vendor
 	cd $(HOST_DIR) && $(GO_NET) mod vendor
 
 update:
-	$(CARGO_NET) update
+	$(CARGO_NET) update $(CORE_MANIFEST)
 	cd $(HOST_DIR) && $(GO_NET) get -u ./... && $(GO_NET) mod tidy
 
 clean:

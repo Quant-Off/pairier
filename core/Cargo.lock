@@ -18,7 +18,23 @@ version = "0.1.0"
 [[package]]
 name = "kms-sys"
 version = "0.1.0"
+dependencies = [
+ "libc",
+ "zeroize",
+]
 
 [[package]]
 name = "kms-wire"
 version = "0.1.0"
+
+[[package]]
+name = "libc"
+version = "0.2.190"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+
+[[package]]
+name = "zeroize"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
