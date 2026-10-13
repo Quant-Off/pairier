@@ -54,7 +54,11 @@ pub(crate) fn generate(alg: Alg) -> Result<Generated, Error> {
         }
         #[cfg(not(feature = "pqc"))]
         Alg::MlDsa65 | Alg::MlDsa87 => Err(Error::CapabilityDisabled),
-        Alg::Aes256Gcm | Alg::MlKem768 | Alg::MlKem1024 => Err(Error::InvalidArgument),
+        Alg::Aes256Gcm
+        | Alg::DhkemP256
+        | Alg::MlKem768
+        | Alg::MlKem1024
+        | Alg::HybridP256MlKem768 => Err(Error::InvalidArgument),
     }
 }
 
@@ -94,7 +98,11 @@ pub(crate) fn sign(alg: Alg, pkcs8: &[u8], message: &[u8]) -> Result<Vec<u8>, Er
         }
         #[cfg(not(feature = "pqc"))]
         Alg::MlDsa65 | Alg::MlDsa87 => Err(Error::CapabilityDisabled),
-        Alg::Aes256Gcm | Alg::MlKem768 | Alg::MlKem1024 => Err(Error::InvalidArgument),
+        Alg::Aes256Gcm
+        | Alg::DhkemP256
+        | Alg::MlKem768
+        | Alg::MlKem1024
+        | Alg::HybridP256MlKem768 => Err(Error::InvalidArgument),
     }
 }
 
@@ -117,7 +125,11 @@ pub(crate) fn verify(
         Alg::MlDsa87 => &ML_DSA_87,
         #[cfg(not(feature = "pqc"))]
         Alg::MlDsa65 | Alg::MlDsa87 => return Err(Error::CapabilityDisabled),
-        Alg::Aes256Gcm | Alg::MlKem768 | Alg::MlKem1024 => return Err(Error::InvalidArgument),
+        Alg::Aes256Gcm
+        | Alg::DhkemP256
+        | Alg::MlKem768
+        | Alg::MlKem1024
+        | Alg::HybridP256MlKem768 => return Err(Error::InvalidArgument),
     };
     Ok(UnparsedPublicKey::new(va, public_key)
         .verify(message, signature)

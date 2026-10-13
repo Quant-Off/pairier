@@ -25,10 +25,20 @@ impl Usage {
     }
 
     #[must_use]
+    pub fn is_subset_of(self, other: Self) -> bool {
+        self.0 & !other.0 == 0
+    }
+
+    #[must_use]
     pub fn allowed_for(alg: Alg) -> u32 {
         match alg.kind() {
             AlgKind::Symmetric => {
-                wire::ENCRYPT | wire::DECRYPT | wire::WRAP | wire::UNWRAP | wire::DERIVE
+                wire::ENCRYPT
+                    | wire::DECRYPT
+                    | wire::WRAP
+                    | wire::UNWRAP
+                    | wire::DERIVE
+                    | wire::EXPORT
             }
             AlgKind::Signature => wire::SIGN | wire::VERIFY,
             AlgKind::Kem => wire::DECAPSULATE | wire::DERIVE,

@@ -5,7 +5,6 @@ mod alg;
 mod blob;
 mod error;
 mod kdf;
-#[cfg(feature = "pqc")]
 mod kem;
 mod root;
 mod sign;
@@ -99,10 +98,7 @@ impl Engine {
                 (k, Vec::new())
             }
             AlgKind::Signature => sign::generate(alg)?,
-            #[cfg(feature = "pqc")]
             AlgKind::Kem => kem::generate(alg)?,
-            #[cfg(not(feature = "pqc"))]
-            AlgKind::Kem => return Err(Error::CapabilityDisabled),
         };
 
         let header = blob::Header {
@@ -198,7 +194,6 @@ impl Engine {
         Ok(out)
     }
 
-    #[cfg(feature = "pqc")]
     pub fn encapsulate(
         &self,
         alg: Alg,
@@ -211,7 +206,6 @@ impl Engine {
         kem::encapsulate(alg, encapsulation_key)
     }
 
-    #[cfg(feature = "pqc")]
     pub fn decapsulate(&self, blob: &[u8], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
         let k = self.open_for(blob, AlgKind::Kem, kms_wire::usage::DECAPSULATE)?;
         kem::decapsulate(k.alg, &k.secret, ciphertext)
@@ -219,7 +213,13 @@ impl Engine {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::panic
+)]
 mod tests {
     use super::{Alg, Engine, Error, RootKey, Usage};
     use kms_wire::usage;
@@ -369,29 +369,79 @@ mod tests {
         signature_roundtrip(&e, Alg::MlDsa87);
     }
 
-    #[cfg(feature = "pqc")]
-    #[test]
-    fn pqc_kem_roundtrip() {
-        let e = engine();
-        for alg in [Alg::MlKem768, Alg::MlKem1024] {
-            let u = Usage::from_bits(usage::DECAPSULATE).unwrap();
-            let k = e.generate_key(alg, u, "kem").unwrap();
-            assert_eq!(k.public_key.len(), alg.public_key_len().unwrap());
-            let (ct, ss1) = e.encapsulate(alg, &k.public_key).unwrap();
-            let ss2 = e.decapsulate(&k.blob, &ct).unwrap();
-            assert_eq!(ss1.as_slice(), ss2.as_slice());
-            assert_eq!(ss1.len(), 32);
-            let mut bad = ct.clone();
-            bad[0] ^= 1;
-            let ss3 = e.decapsulate(&k.blob, &bad).unwrap();
-            assert_ne!(ss1.as_slice(), ss3.as_slice());
-            assert_eq!(e.decapsulate(&k.blob, &ct[1..]), Err(Error::CryptoFailure));
-            assert_eq!(
-                e.encapsulate(alg, &k.public_key[1..]),
-                Err(Error::InvalidArgument)
-            );
-            assert_eq!(e.sign(&k.blob, b"m"), Err(Error::InvalidArgument));
+    fn kem_roundtrip(e: &Engine, alg: Alg) {
+        let u = Usage::from_bits(usage::DECAPSULATE).unwrap();
+        let k = e.generate_key(alg, u, "kem").unwrap();
+        assert_eq!(k.public_key.len(), alg.public_key_len().unwrap());
+        let (ct, ss1) = e.encapsulate(alg, &k.public_key).unwrap();
+        assert_eq!(ct.len(), alg.kem_ciphertext_len().unwrap());
+        let ss2 = e
+            .decapsulate(&k.blob, &ct)
+            .unwrap_or_else(|err| panic!("{alg:?}: decapsulate {err}"));
+        assert_eq!(ss1.as_slice(), ss2.as_slice());
+        assert_eq!(ss1.len(), 32);
+        let (ct2, ss3) = e.encapsulate(alg, &k.public_key).unwrap();
+        assert_ne!(ct, ct2);
+        assert_ne!(ss1.as_slice(), ss3.as_slice());
+        let mut bad = ct.clone();
+        bad[ct.len() - 1] ^= 1;
+        match e.decapsulate(&k.blob, &bad) {
+            Ok(ss) => assert_ne!(ss1.as_slice(), ss.as_slice()),
+            Err(err) => assert_eq!(err, Error::CryptoFailure),
         }
+        assert_eq!(e.decapsulate(&k.blob, &ct[1..]), Err(Error::CryptoFailure));
+        assert_eq!(
+            e.encapsulate(alg, &k.public_key[1..]),
+            Err(Error::InvalidArgument)
+        );
+        assert_eq!(e.sign(&k.blob, b"m"), Err(Error::InvalidArgument));
+        assert_eq!(
+            e.aead_encrypt(&k.blob, b"x", b""),
+            Err(Error::InvalidArgument)
+        );
+        let other = e.generate_key(alg, u, "other").unwrap();
+        let ss4 = e.decapsulate(&other.blob, &ct);
+        assert!(ss4.map_or(true, |s| s.as_slice() != ss1.as_slice()));
+    }
+
+    #[test]
+    fn classical_kem() {
+        let e = engine();
+        kem_roundtrip(&e, Alg::DhkemP256);
+        let enc = Usage::from_bits(usage::ENCRYPT).unwrap();
+        assert_eq!(
+            e.generate_key(Alg::DhkemP256, enc, "").unwrap_err(),
+            Error::InvalidArgument
+        );
+        assert_eq!(
+            e.encapsulate(Alg::Aes256Gcm, &[0u8; 65]),
+            Err(Error::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn pqc_kems_follow_capability() {
+        let e = engine();
+        for alg in [Alg::MlKem768, Alg::MlKem1024, Alg::HybridP256MlKem768] {
+            if cfg!(feature = "pqc") {
+                kem_roundtrip(&e, alg);
+            } else {
+                let u = Usage::from_bits(usage::DECAPSULATE).unwrap();
+                assert_eq!(
+                    e.generate_key(alg, u, "").unwrap_err(),
+                    Error::CapabilityDisabled
+                );
+                assert_eq!(
+                    e.encapsulate(alg, &[0u8; 65]),
+                    Err(Error::CapabilityDisabled)
+                );
+            }
+        }
+        let off = Engine::new(RootKey::generate().unwrap(), false);
+        assert_eq!(
+            off.encapsulate(Alg::HybridP256MlKem768, &[0u8; 1249]),
+            Err(Error::CapabilityDisabled)
+        );
     }
 
     #[test]

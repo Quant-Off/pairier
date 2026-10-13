@@ -15,14 +15,16 @@ const (
 )
 
 const (
-	AlgAES256GCM       uint16 = 0x0001
-	AlgECDSAP256SHA256 uint16 = 0x0010
-	AlgECDSAP384SHA384 uint16 = 0x0011
-	AlgEd25519         uint16 = 0x0020
-	AlgMLDSA65         uint16 = 0x0100
-	AlgMLDSA87         uint16 = 0x0101
-	AlgMLKEM768        uint16 = 0x0200
-	AlgMLKEM1024       uint16 = 0x0201
+	AlgAES256GCM          uint16 = 0x0001
+	AlgECDSAP256SHA256    uint16 = 0x0010
+	AlgECDSAP384SHA384    uint16 = 0x0011
+	AlgEd25519            uint16 = 0x0020
+	AlgDHKEMP256          uint16 = 0x0030
+	AlgMLDSA65            uint16 = 0x0100
+	AlgMLDSA87            uint16 = 0x0101
+	AlgMLKEM768           uint16 = 0x0200
+	AlgMLKEM1024          uint16 = 0x0201
+	AlgHybridP256MLKEM768 uint16 = 0x0210
 )
 
 const (
@@ -34,7 +36,8 @@ const (
 	UsageUnwrap      uint32 = 1 << 5
 	UsageDerive      uint32 = 1 << 6
 	UsageDecapsulate uint32 = 1 << 7
-	UsageAll         uint32 = (1 << 8) - 1
+	UsageExport      uint32 = 1 << 8
+	UsageAll         uint32 = (1 << 9) - 1
 )
 
 const (
