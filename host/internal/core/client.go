@@ -36,6 +36,21 @@ type GeneratedKey struct {
 	PublicKey []byte
 }
 
+type KeyInfo struct {
+	Alg   uint16
+	Usage uint32
+	KeyID [wire.KeyIDLen]byte
+	Label string
+}
+
+type ImportedKey struct {
+	KeyID [wire.KeyIDLen]byte
+	Blob  []byte
+	Alg   uint16
+	Usage uint32
+	Label string
+}
+
 type Client struct {
 	mu      sync.Mutex
 	conn    net.Conn
@@ -130,6 +145,38 @@ func (c *Client) Verify(ctx context.Context, alg uint16, publicKey, message, sig
 		return false, err
 	}
 	return rsp.Valid, nil
+}
+
+func (c *Client) Inspect(ctx context.Context, blob []byte) (*KeyInfo, error) {
+	var rsp wire.KeyInspectResponse
+	if err := c.call(ctx, &wire.KeyInspectRequest{KeyBlob: blob}, &rsp); err != nil {
+		return nil, err
+	}
+	return &KeyInfo{Alg: rsp.Alg, Usage: rsp.Usage, KeyID: rsp.KeyID, Label: rsp.Label}, nil
+}
+
+func (c *Client) ExportKey(ctx context.Context, blob []byte, kemAlg uint16, recipientPublicKey []byte, usage uint32, context []byte) ([]byte, error) {
+	if len(context) > wire.MaxContext {
+		return nil, &StatusError{Op: wire.OpKeyExport, Status: wire.StatusLimitExceeded}
+	}
+	var rsp wire.KeyExportResponse
+	req := &wire.KeyExportRequest{KeyBlob: blob, KemAlg: kemAlg, RecipientPublicKey: recipientPublicKey, Usage: usage, Context: context}
+	if err := c.call(ctx, req, &rsp); err != nil {
+		return nil, err
+	}
+	return rsp.Package, nil
+}
+
+func (c *Client) ImportKey(ctx context.Context, kemBlob, pkg, context []byte) (*ImportedKey, error) {
+	if len(pkg) > wire.MaxPackage || len(context) > wire.MaxContext {
+		return nil, &StatusError{Op: wire.OpKeyImport, Status: wire.StatusLimitExceeded}
+	}
+	var rsp wire.KeyImportResponse
+	req := &wire.KeyImportRequest{KemKeyBlob: kemBlob, Package: pkg, Context: context}
+	if err := c.call(ctx, req, &rsp); err != nil {
+		return nil, err
+	}
+	return &ImportedKey{KeyID: rsp.KeyID, Blob: rsp.KeyBlob, Alg: rsp.Alg, Usage: rsp.Usage, Label: rsp.Label}, nil
 }
 
 func (c *Client) Random(ctx context.Context, n int) ([]byte, error) {

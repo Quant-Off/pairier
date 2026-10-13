@@ -42,7 +42,7 @@ test-core:
 
 test-host:
 	cd $(CORE_DIR) && $(CARGO) build --frozen -p kms-core --features pqc
-	cd $(HOST_DIR) && KMS_CORE_BIN=$(KMS_CORE_BIN) $(GO) test ./...
+	cd $(HOST_DIR) && KMS_CORE_BIN=$(KMS_CORE_BIN) $(GO) test -race ./...
 
 lint: lint-core lint-host
 
