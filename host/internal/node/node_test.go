@@ -6,9 +6,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Quant-Off/pairier/host/internal/audit"
 	"github.com/Quant-Off/pairier/host/internal/core"
 	"github.com/Quant-Off/pairier/host/internal/exchange"
 	"github.com/Quant-Off/pairier/host/internal/store"
@@ -162,6 +164,33 @@ func TestExchangeBetweenNodes(t *testing.T) {
 	}
 	if _, err := bob.Receive(ctx, env3); !errors.Is(err, store.ErrExists) {
 		t.Fatalf("expected duplicate key id, got %v", err)
+	}
+
+	entries, err := audit.Read(reopened.AuditLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	for _, e := range entries {
+		events = append(events, e.Event)
+	}
+	joined := strings.Join(events, ",")
+	for _, want := range []string{"node.init", "member.add", "key.generate", "key.encrypt", "key.send", "node.open"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("audit log lacks %s: %s", want, joined)
+		}
+	}
+	var failed bool
+	for _, e := range entries {
+		if e.Event == "key.send" && e.Fields["to"] == "carol" && e.Fields["error"] != "" {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatal("failed send to unknown member not audited")
+	}
+	if n, err := audit.Verify(bob.AuditLogPath()); err != nil || n == 0 {
+		t.Fatalf("bob audit %d %v", n, err)
 	}
 }
 

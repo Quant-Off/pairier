@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Quant-Off/pairier/host/internal/audit"
 	"github.com/Quant-Off/pairier/host/internal/core"
 	"github.com/Quant-Off/pairier/host/internal/exchange"
 	"github.com/Quant-Off/pairier/host/internal/store"
@@ -44,9 +45,23 @@ type Node struct {
 	opts     Options
 	st       *store.Store
 	core     *core.Client
+	log      *audit.Log
 	info     *store.Node
 	identity *store.KeyRecord
 	kem      *store.KeyRecord
+}
+
+func (n *Node) audit(event string, fields map[string]string, err error) error {
+	if err != nil {
+		if fields == nil {
+			fields = map[string]string{}
+		}
+		fields["error"] = err.Error()
+	}
+	if aerr := n.log.Append(event, fields); aerr != nil {
+		return fmt.Errorf("node: audit: %w", aerr)
+	}
+	return err
 }
 
 func (o *Options) now() time.Time {
@@ -88,9 +103,18 @@ func Init(ctx context.Context, o Options, memberID string, pqc bool) (*Node, err
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{opts: o, st: st, core: c}
-	if err := n.createIdentity(ctx, memberID, pqc); err != nil {
+	log, err := audit.Open(st.AuditLogPath(), o.Now)
+	if err != nil {
 		_ = c.Close()
+		return nil, err
+	}
+	n := &Node{opts: o, st: st, core: c, log: log}
+	if err := n.createIdentity(ctx, memberID, pqc); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	if err := n.audit("node.init", map[string]string{"member": memberID, "identity": n.identity.KeyID, "kem": n.kem.KeyID, "pqc": fmt.Sprint(pqc), "fips": fmt.Sprint(c.FIPS())}, nil); err != nil {
+		_ = n.Close()
 		return nil, err
 	}
 	return n, nil
@@ -150,32 +174,47 @@ func Open(ctx context.Context, o Options) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{opts: o, st: st, core: c, info: info}
-	if info.PQC && !c.PQC() {
+	log, err := audit.Open(st.AuditLogPath(), o.Now)
+	if err != nil {
 		_ = c.Close()
+		return nil, err
+	}
+	n := &Node{opts: o, st: st, core: c, log: log, info: info}
+	if info.PQC && !c.PQC() {
+		_ = n.Close()
 		return nil, ErrPQCUnavailable
 	}
 	if n.identity, err = n.Key(ctx, info.IdentityKeyID); err != nil {
-		_ = c.Close()
+		_ = n.Close()
 		return nil, fmt.Errorf("node: identity key: %w", err)
 	}
 	if n.kem, err = n.Key(ctx, info.KemKeyID); err != nil {
-		_ = c.Close()
+		_ = n.Close()
 		return nil, fmt.Errorf("node: kem key: %w", err)
 	}
 	if n.identity.Usage != wire.UsageSign || !exchange.IsSignatureAlg(n.identity.Alg) ||
 		n.kem.Usage != wire.UsageDecapsulate || !exchange.IsKemAlg(n.kem.Alg) ||
 		len(n.identity.PublicKey) == 0 || len(n.kem.PublicKey) == 0 {
-		_ = c.Close()
+		_ = n.Close()
 		return nil, ErrMetadata
+	}
+	if err := n.audit("node.open", map[string]string{"member": info.MemberID, "fips": fmt.Sprint(c.FIPS()), "pqc": fmt.Sprint(c.PQC())}, nil); err != nil {
+		_ = n.Close()
+		return nil, err
 	}
 	return n, nil
 }
 
-func (n *Node) Close() error     { return n.core.Close() }
-func (n *Node) MemberID() string { return n.info.MemberID }
-func (n *Node) PQC() bool        { return n.info.PQC }
-func (n *Node) FIPS() bool       { return n.core.FIPS() }
+func (n *Node) Close() error {
+	cerr := n.core.Close()
+	lerr := n.log.Close()
+	return errors.Join(cerr, lerr)
+}
+
+func (n *Node) AuditLogPath() string { return n.st.AuditLogPath() }
+func (n *Node) MemberID() string     { return n.info.MemberID }
+func (n *Node) PQC() bool            { return n.info.PQC }
+func (n *Node) FIPS() bool           { return n.core.FIPS() }
 func (n *Node) Core() *core.Client {
 	return n.core
 }
@@ -206,10 +245,13 @@ func (n *Node) GenerateKey(ctx context.Context, label string, usage uint32) (*st
 	}
 	k, err := n.core.GenerateKey(ctx, wire.AlgAES256GCM, usage, label)
 	if err != nil {
-		return nil, err
+		return nil, n.audit("key.generate", map[string]string{"label": label}, err)
 	}
 	rec := &store.KeyRecord{KeyID: store.KeyIDString(k.KeyID), Alg: wire.AlgAES256GCM, Usage: usage, Label: label, Blob: k.Blob, CreatedAt: n.opts.now().Unix()}
 	if err := n.st.PutKey(rec); err != nil {
+		return nil, n.audit("key.generate", map[string]string{"key": rec.KeyID, "label": label}, err)
+	}
+	if err := n.audit("key.generate", map[string]string{"key": rec.KeyID, "label": label, "usage": fmt.Sprint(usage)}, nil); err != nil {
 		return nil, err
 	}
 	return rec, nil
@@ -218,17 +260,25 @@ func (n *Node) GenerateKey(ctx context.Context, label string, usage uint32) (*st
 func (n *Node) Encrypt(ctx context.Context, keyID string, plaintext, aad []byte) ([]byte, error) {
 	rec, err := n.Key(ctx, keyID)
 	if err != nil {
+		return nil, n.audit("key.encrypt", map[string]string{"key": keyID}, err)
+	}
+	ct, err := n.core.Encrypt(ctx, rec.Blob, plaintext, aad)
+	if err := n.audit("key.encrypt", map[string]string{"key": keyID, "bytes": fmt.Sprint(len(plaintext))}, err); err != nil {
 		return nil, err
 	}
-	return n.core.Encrypt(ctx, rec.Blob, plaintext, aad)
+	return ct, nil
 }
 
 func (n *Node) Decrypt(ctx context.Context, keyID string, ciphertext, aad []byte) ([]byte, error) {
 	rec, err := n.Key(ctx, keyID)
 	if err != nil {
+		return nil, n.audit("key.decrypt", map[string]string{"key": keyID}, err)
+	}
+	pt, err := n.core.Decrypt(ctx, rec.Blob, ciphertext, aad)
+	if err := n.audit("key.decrypt", map[string]string{"key": keyID, "bytes": fmt.Sprint(len(ciphertext))}, err); err != nil {
 		return nil, err
 	}
-	return n.core.Decrypt(ctx, rec.Blob, ciphertext, aad)
+	return pt, nil
 }
 
 func (n *Node) Card(ctx context.Context) (*exchange.Card, []byte, error) {
@@ -251,6 +301,19 @@ func (n *Node) Card(ctx context.Context) (*exchange.Card, []byte, error) {
 }
 
 func (n *Node) AddMember(ctx context.Context, raw []byte, fingerprint string) (*store.MemberRecord, error) {
+	rec, err := n.addMember(ctx, raw, fingerprint)
+	fields := map[string]string{}
+	if rec != nil {
+		fields["member"] = rec.MemberID
+		fields["fingerprint"] = rec.Fingerprint
+	}
+	if err := n.audit("member.add", fields, err); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (n *Node) addMember(ctx context.Context, raw []byte, fingerprint string) (*store.MemberRecord, error) {
 	card, err := exchange.DecodeCard(raw)
 	if err != nil {
 		return nil, err
@@ -299,6 +362,14 @@ func (n *Node) Member(ctx context.Context, id string) (*exchange.Card, error) {
 }
 
 func (n *Node) Send(ctx context.Context, keyID, to string, usage uint32) ([]byte, error) {
+	env, err := n.send(ctx, keyID, to, usage)
+	if err := n.audit("key.send", map[string]string{"key": keyID, "to": to, "usage": fmt.Sprint(usage)}, err); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+func (n *Node) send(ctx context.Context, keyID, to string, usage uint32) ([]byte, error) {
 	rec, err := n.Key(ctx, keyID)
 	if err != nil {
 		return nil, err
@@ -330,6 +401,20 @@ func (n *Node) Send(ctx context.Context, keyID, to string, usage uint32) ([]byte
 }
 
 func (n *Node) Receive(ctx context.Context, raw []byte) (*store.KeyRecord, error) {
+	rec, err := n.receive(ctx, raw)
+	fields := map[string]string{"envelope": store.InboxID(raw)}
+	if rec != nil {
+		fields["key"] = rec.KeyID
+		fields["from"] = rec.Origin.Sender
+		fields["usage"] = fmt.Sprint(rec.Usage)
+	}
+	if err := n.audit("key.receive", fields, err); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (n *Node) receive(ctx context.Context, raw []byte) (*store.KeyRecord, error) {
 	env, err := exchange.DecodeEnvelope(raw)
 	if err != nil {
 		return nil, err
