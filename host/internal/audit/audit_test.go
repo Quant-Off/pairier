@@ -88,3 +88,37 @@ func TestChainAppendVerifyAndTamper(t *testing.T) {
 		t.Fatalf("permissive mode accepted: %v", err)
 	}
 }
+
+func TestConcurrentHandlesShareOneChain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	a, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	for i := 0; i < 5; i++ {
+		if err := a.Append("a", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Append("b", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.Seq() != 9 || b.Seq() != 10 {
+		t.Fatalf("seq %d %d", a.Seq(), b.Seq())
+	}
+	if n, err := Verify(path); err != nil || n != 10 {
+		t.Fatalf("verify %d %v", n, err)
+	}
+	if err := os.Truncate(path, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Append("a", nil); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("shrunk log not detected: %v", err)
+	}
+}

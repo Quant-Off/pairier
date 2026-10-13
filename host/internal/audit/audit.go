@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -40,11 +41,12 @@ type Entry struct {
 }
 
 type Log struct {
-	mu   sync.Mutex
-	f    *os.File
-	seq  uint64
-	prev string
-	now  func() time.Time
+	mu     sync.Mutex
+	f      *os.File
+	seq    uint64
+	prev   string
+	offset int64
+	now    func() time.Time
 }
 
 func Open(path string, now func() time.Time) (*Log, error) {
@@ -68,12 +70,50 @@ func Open(path string, now func() time.Time) (*Log, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("%w: %s is a symlink", ErrInsecure, path)
 	}
-	seq, prev, err := replay(f)
+	l := &Log{f: f, prev: genesis, now: now}
+	if err := l.lock(); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	err = l.catchUp()
+	l.unlock()
 	if err != nil {
 		_ = f.Close()
 		return nil, err
 	}
-	return &Log{f: f, seq: seq, prev: prev, now: now}, nil
+	return l, nil
+}
+
+func (l *Log) lock() error {
+	if err := syscall.Flock(int(l.f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("audit: lock: %w", err)
+	}
+	return nil
+}
+
+func (l *Log) unlock() {
+	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
+}
+
+func (l *Log) catchUp() error {
+	fi, err := l.f.Stat()
+	if err != nil {
+		return err
+	}
+	size := fi.Size()
+	if size < l.offset {
+		return fmt.Errorf("%w: log shrank from %d to %d bytes", ErrCorrupt, l.offset, size)
+	}
+	if size == l.offset {
+		return nil
+	}
+	section := io.NewSectionReader(l.f, l.offset, size-l.offset)
+	seq, prev, err := replayFrom(section, l.seq, l.prev)
+	if err != nil {
+		return err
+	}
+	l.seq, l.prev, l.offset = seq, prev, size
+	return nil
 }
 
 func (l *Log) Close() error {
@@ -99,6 +139,13 @@ func (l *Log) Append(event string, fields map[string]string) error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if err := l.lock(); err != nil {
+		return err
+	}
+	defer l.unlock()
+	if err := l.catchUp(); err != nil {
+		return err
+	}
 	e := &Entry{Seq: l.seq + 1, Time: l.now().Unix(), Event: event, Fields: fields, Prev: l.prev}
 	h, err := digest(e)
 	if err != nil {
@@ -110,7 +157,8 @@ func (l *Log) Append(event string, fields map[string]string) error {
 		return err
 	}
 	line = append(line, '\n')
-	if _, err := l.f.Write(line); err != nil {
+	n, err := l.f.Write(line)
+	if err != nil {
 		return err
 	}
 	if err := l.f.Sync(); err != nil {
@@ -118,6 +166,7 @@ func (l *Log) Append(event string, fields map[string]string) error {
 	}
 	l.seq = e.Seq
 	l.prev = e.Hash
+	l.offset += int64(n)
 	return nil
 }
 
@@ -153,8 +202,10 @@ func digest(e *Entry) (string, error) {
 }
 
 func replay(r io.Reader) (uint64, string, error) {
-	var seq uint64
-	prev := genesis
+	return replayFrom(r, 0, genesis)
+}
+
+func replayFrom(r io.Reader, seq uint64, prev string) (uint64, string, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, maxLine), maxLine)
 	for sc.Scan() {
