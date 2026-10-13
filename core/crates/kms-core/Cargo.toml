@@ -10,7 +10,8 @@ name = "kms-core"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["non-fips"]
+non-fips = ["kms-engine/non-fips"]
 fips = ["kms-engine/fips"]
 pqc = ["kms-engine/pqc"]
 

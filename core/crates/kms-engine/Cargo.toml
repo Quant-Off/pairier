@@ -6,11 +6,16 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-default = []
-fips = []
+default = ["non-fips"]
+non-fips = ["aws-lc-rs/aws-lc-sys"]
+fips = ["aws-lc-rs/fips"]
 pqc = []
 
 [dependencies]
+aws-lc-rs = { version = "1.18", default-features = false, features = ["alloc"] }
+kms-sys.workspace = true
+kms-wire.workspace = true
+zeroize = "1"
 
 [lints]
 workspace = true

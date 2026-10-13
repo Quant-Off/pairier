@@ -1,1 +1,426 @@
 #![forbid(unsafe_code)]
+
+mod aead;
+mod alg;
+mod blob;
+mod error;
+mod kdf;
+#[cfg(feature = "pqc")]
+mod kem;
+mod root;
+mod sign;
+mod usage;
+
+use kms_wire::msg::{KEY_ID_LEN, MAX_LABEL, MAX_RANDOM};
+use zeroize::Zeroizing;
+
+pub use alg::{Alg, AlgKind};
+pub use error::Error;
+pub use root::{ROOT_KEY_LEN, RootKey};
+pub use usage::Usage;
+
+pub const ENGINE_NAME: &str = "kms-engine";
+pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const AEAD_OVERHEAD: usize = aead::OVERHEAD;
+
+#[derive(Debug)]
+pub struct GeneratedKey {
+    pub key_id: [u8; KEY_ID_LEN],
+    pub blob: Vec<u8>,
+    pub public_key: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyInfo {
+    pub alg: Alg,
+    pub usage: Usage,
+    pub key_id: [u8; KEY_ID_LEN],
+    pub label: String,
+}
+
+#[derive(Debug)]
+pub struct Engine {
+    root: RootKey,
+    pqc_enabled: bool,
+}
+
+impl Engine {
+    #[must_use]
+    pub fn new(root: RootKey, pqc_enabled: bool) -> Self {
+        Self { root, pqc_enabled }
+    }
+
+    #[must_use]
+    pub fn fips_mode() -> bool {
+        aws_lc_rs::try_fips_mode().is_ok()
+    }
+
+    #[must_use]
+    pub fn pqc_available(&self) -> bool {
+        cfg!(feature = "pqc") && self.pqc_enabled
+    }
+
+    #[must_use]
+    pub fn capabilities(&self) -> u64 {
+        let mut caps = 0;
+        if Self::fips_mode() {
+            caps |= kms_wire::cap::FIPS;
+        }
+        if self.pqc_available() {
+            caps |= kms_wire::cap::PQC;
+        }
+        caps
+    }
+
+    fn check_enabled(&self, alg: Alg) -> Result<(), Error> {
+        if alg.is_pqc() && !self.pqc_available() {
+            return Err(Error::CapabilityDisabled);
+        }
+        Ok(())
+    }
+
+    pub fn generate_key(&self, alg: Alg, usage: Usage, label: &str) -> Result<GeneratedKey, Error> {
+        self.check_enabled(alg)?;
+        usage.check_for(alg)?;
+        if label.len() > MAX_LABEL {
+            return Err(Error::InvalidArgument);
+        }
+        let mut key_id = [0u8; KEY_ID_LEN];
+        aws_lc_rs::rand::fill(&mut key_id).map_err(|_| Error::Internal)?;
+
+        let (secret, public_key) = match alg.kind() {
+            AlgKind::Symmetric => {
+                let mut k = Zeroizing::new(vec![0u8; aead::KEY_LEN]);
+                aws_lc_rs::rand::fill(k.as_mut_slice()).map_err(|_| Error::Internal)?;
+                (k, Vec::new())
+            }
+            AlgKind::Signature => sign::generate(alg)?,
+            #[cfg(feature = "pqc")]
+            AlgKind::Kem => kem::generate(alg)?,
+            #[cfg(not(feature = "pqc"))]
+            AlgKind::Kem => return Err(Error::CapabilityDisabled),
+        };
+
+        let header = blob::Header {
+            alg,
+            usage,
+            key_id,
+            label,
+        };
+        let blob = blob::seal(&self.root, &header, &secret)?;
+        Ok(GeneratedKey {
+            key_id,
+            blob,
+            public_key,
+        })
+    }
+
+    pub fn inspect(&self, blob: &[u8]) -> Result<KeyInfo, Error> {
+        let k = blob::open(&self.root, blob)?;
+        Ok(KeyInfo {
+            alg: k.alg,
+            usage: k.usage,
+            key_id: k.key_id,
+            label: k.label,
+        })
+    }
+
+    fn open_for(&self, blob: &[u8], kind: AlgKind, required: u32) -> Result<blob::Unsealed, Error> {
+        let k = blob::open(&self.root, blob)?;
+        self.check_enabled(k.alg)?;
+        if k.alg.kind() != kind {
+            return Err(Error::InvalidArgument);
+        }
+        if !k.usage.contains(required) {
+            return Err(Error::UsageDenied);
+        }
+        Ok(k)
+    }
+
+    pub fn aead_encrypt(
+        &self,
+        blob: &[u8],
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        let k = self.open_for(blob, AlgKind::Symmetric, kms_wire::usage::ENCRYPT)?;
+        aead::encrypt(&k.secret, plaintext, aad)
+    }
+
+    pub fn aead_decrypt(
+        &self,
+        blob: &[u8],
+        ciphertext: &[u8],
+        aad: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, Error> {
+        let k = self.open_for(blob, AlgKind::Symmetric, kms_wire::usage::DECRYPT)?;
+        aead::decrypt(&k.secret, ciphertext, aad)
+    }
+
+    pub fn sign(&self, blob: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
+        if message.len() > kms_wire::msg::MAX_MESSAGE {
+            return Err(Error::LimitExceeded);
+        }
+        let k = self.open_for(blob, AlgKind::Signature, kms_wire::usage::SIGN)?;
+        sign::sign(k.alg, &k.secret, message)
+    }
+
+    pub fn verify(
+        &self,
+        alg: Alg,
+        public_key: &[u8],
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, Error> {
+        self.check_enabled(alg)?;
+        if alg.kind() != AlgKind::Signature {
+            return Err(Error::InvalidArgument);
+        }
+        if message.len() > kms_wire::msg::MAX_MESSAGE
+            || signature.len() > kms_wire::msg::MAX_SIGNATURE
+        {
+            return Err(Error::LimitExceeded);
+        }
+        sign::verify(alg, public_key, message, signature)
+    }
+
+    pub fn random(&self, len: usize) -> Result<Vec<u8>, Error> {
+        let max = usize::try_from(MAX_RANDOM).map_err(|_| Error::Internal)?;
+        if len > max {
+            return Err(Error::LimitExceeded);
+        }
+        let mut out = vec![0u8; len];
+        aws_lc_rs::rand::fill(&mut out).map_err(|_| Error::Internal)?;
+        Ok(out)
+    }
+
+    #[cfg(feature = "pqc")]
+    pub fn encapsulate(
+        &self,
+        alg: Alg,
+        encapsulation_key: &[u8],
+    ) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), Error> {
+        self.check_enabled(alg)?;
+        if alg.kind() != AlgKind::Kem {
+            return Err(Error::InvalidArgument);
+        }
+        kem::encapsulate(alg, encapsulation_key)
+    }
+
+    #[cfg(feature = "pqc")]
+    pub fn decapsulate(&self, blob: &[u8], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
+        let k = self.open_for(blob, AlgKind::Kem, kms_wire::usage::DECAPSULATE)?;
+        kem::decapsulate(k.alg, &k.secret, ciphertext)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+mod tests {
+    use super::{Alg, Engine, Error, RootKey, Usage};
+    use kms_wire::usage;
+
+    fn engine() -> Engine {
+        Engine::new(RootKey::generate().unwrap(), true)
+    }
+
+    #[test]
+    fn capabilities_reflect_build() {
+        let e = engine();
+        assert_eq!(Engine::fips_mode(), cfg!(feature = "fips"));
+        assert_eq!(e.pqc_available(), cfg!(feature = "pqc"));
+        let caps = e.capabilities();
+        assert_eq!(caps & kms_wire::cap::FIPS != 0, cfg!(feature = "fips"));
+        assert_eq!(caps & kms_wire::cap::PQC != 0, cfg!(feature = "pqc"));
+        let off = Engine::new(RootKey::generate().unwrap(), false);
+        assert!(!off.pqc_available());
+        assert_eq!(
+            off.generate_key(Alg::MlDsa65, Usage::from_bits(usage::SIGN).unwrap(), "")
+                .unwrap_err(),
+            Error::CapabilityDisabled
+        );
+    }
+
+    #[test]
+    fn symmetric_roundtrip_with_usage_enforcement() {
+        let e = engine();
+        let both = Usage::from_bits(usage::ENCRYPT | usage::DECRYPT).unwrap();
+        let k = e.generate_key(Alg::Aes256Gcm, both, "tenant/db").unwrap();
+        assert!(k.public_key.is_empty());
+        let info = e.inspect(&k.blob).unwrap();
+        assert_eq!(info.alg, Alg::Aes256Gcm);
+        assert_eq!(info.usage, both);
+        assert_eq!(info.key_id, k.key_id);
+        assert_eq!(info.label, "tenant/db");
+        let ct = e.aead_encrypt(&k.blob, b"hello", b"ctx").unwrap();
+        assert_eq!(ct.len(), 5 + super::AEAD_OVERHEAD);
+        let pt = e.aead_decrypt(&k.blob, &ct, b"ctx").unwrap();
+        assert_eq!(pt.as_slice(), b"hello");
+        assert_eq!(
+            e.aead_decrypt(&k.blob, &ct, b"other"),
+            Err(Error::CryptoFailure)
+        );
+        let mut bad = ct.clone();
+        bad[40] ^= 1;
+        assert_eq!(
+            e.aead_decrypt(&k.blob, &bad, b"ctx"),
+            Err(Error::CryptoFailure)
+        );
+        let ct2 = e.aead_encrypt(&k.blob, b"hello", b"ctx").unwrap();
+        assert_ne!(ct, ct2);
+
+        let enc_only = Usage::from_bits(usage::ENCRYPT).unwrap();
+        let k2 = e.generate_key(Alg::Aes256Gcm, enc_only, "").unwrap();
+        let ct3 = e.aead_encrypt(&k2.blob, b"x", b"").unwrap();
+        assert_eq!(e.aead_decrypt(&k2.blob, &ct3, b""), Err(Error::UsageDenied));
+        assert_eq!(e.sign(&k2.blob, b"m"), Err(Error::InvalidArgument));
+    }
+
+    #[test]
+    fn blobs_are_bound_to_root_key() {
+        let e1 = engine();
+        let e2 = engine();
+        let u = Usage::from_bits(usage::ENCRYPT | usage::DECRYPT).unwrap();
+        let k = e1.generate_key(Alg::Aes256Gcm, u, "").unwrap();
+        assert_eq!(
+            e2.aead_encrypt(&k.blob, b"x", b""),
+            Err(Error::InvalidKeyBlob)
+        );
+        let mut tampered = k.blob.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 1;
+        assert_eq!(
+            e1.aead_encrypt(&tampered, b"x", b""),
+            Err(Error::InvalidKeyBlob)
+        );
+        let mut relabel = k.blob.clone();
+        relabel[3] ^= 1;
+        assert_eq!(
+            e1.aead_encrypt(&relabel, b"x", b""),
+            Err(Error::InvalidKeyBlob)
+        );
+        assert_eq!(
+            e1.aead_encrypt(&k.blob[..20], b"x", b""),
+            Err(Error::InvalidKeyBlob)
+        );
+        assert_eq!(e1.aead_encrypt(&[], b"x", b""), Err(Error::InvalidKeyBlob));
+    }
+
+    #[test]
+    fn invalid_usage_and_label_rejected() {
+        let e = engine();
+        assert_eq!(Usage::from_bits(0), Err(Error::InvalidArgument));
+        assert_eq!(Usage::from_bits(1 << 31), Err(Error::InvalidArgument));
+        let sign = Usage::from_bits(usage::SIGN).unwrap();
+        assert_eq!(
+            e.generate_key(Alg::Aes256Gcm, sign, "").unwrap_err(),
+            Error::InvalidArgument
+        );
+        let enc = Usage::from_bits(usage::ENCRYPT).unwrap();
+        assert_eq!(
+            e.generate_key(Alg::Ed25519, enc, "").unwrap_err(),
+            Error::InvalidArgument
+        );
+        let long = "a".repeat(257);
+        assert_eq!(
+            e.generate_key(Alg::Aes256Gcm, enc, &long).unwrap_err(),
+            Error::InvalidArgument
+        );
+    }
+
+    fn signature_roundtrip(e: &Engine, alg: Alg) {
+        let u = Usage::from_bits(usage::SIGN | usage::VERIFY).unwrap();
+        let k = e.generate_key(alg, u, "signer").unwrap();
+        assert_eq!(k.public_key.len(), alg.public_key_len().unwrap());
+        let sig = e.sign(&k.blob, b"message").unwrap();
+        assert_eq!(sig.len(), alg.signature_len().unwrap());
+        assert!(e.verify(alg, &k.public_key, b"message", &sig).unwrap());
+        assert!(!e.verify(alg, &k.public_key, b"messagf", &sig).unwrap());
+        let mut bad = sig.clone();
+        bad[10] ^= 1;
+        assert!(!e.verify(alg, &k.public_key, b"message", &bad).unwrap());
+        assert_eq!(
+            e.verify(alg, &k.public_key[1..], b"message", &sig),
+            Err(Error::InvalidArgument)
+        );
+        assert_eq!(
+            e.aead_encrypt(&k.blob, b"x", b""),
+            Err(Error::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn classical_signatures() {
+        let e = engine();
+        signature_roundtrip(&e, Alg::EcdsaP256Sha256);
+        signature_roundtrip(&e, Alg::EcdsaP384Sha384);
+        signature_roundtrip(&e, Alg::Ed25519);
+    }
+
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn pqc_signatures() {
+        let e = engine();
+        signature_roundtrip(&e, Alg::MlDsa65);
+        signature_roundtrip(&e, Alg::MlDsa87);
+    }
+
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn pqc_kem_roundtrip() {
+        let e = engine();
+        for alg in [Alg::MlKem768, Alg::MlKem1024] {
+            let u = Usage::from_bits(usage::DECAPSULATE).unwrap();
+            let k = e.generate_key(alg, u, "kem").unwrap();
+            assert_eq!(k.public_key.len(), alg.public_key_len().unwrap());
+            let (ct, ss1) = e.encapsulate(alg, &k.public_key).unwrap();
+            let ss2 = e.decapsulate(&k.blob, &ct).unwrap();
+            assert_eq!(ss1.as_slice(), ss2.as_slice());
+            assert_eq!(ss1.len(), 32);
+            let mut bad = ct.clone();
+            bad[0] ^= 1;
+            let ss3 = e.decapsulate(&k.blob, &bad).unwrap();
+            assert_ne!(ss1.as_slice(), ss3.as_slice());
+            assert_eq!(e.decapsulate(&k.blob, &ct[1..]), Err(Error::CryptoFailure));
+            assert_eq!(
+                e.encapsulate(alg, &k.public_key[1..]),
+                Err(Error::InvalidArgument)
+            );
+            assert_eq!(e.sign(&k.blob, b"m"), Err(Error::InvalidArgument));
+        }
+    }
+
+    #[test]
+    fn random_is_bounded_and_fresh() {
+        let e = engine();
+        assert!(e.random(0).unwrap().is_empty());
+        let a = e.random(32).unwrap();
+        let b = e.random(32).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(e.random(1025), Err(Error::LimitExceeded));
+    }
+
+    #[test]
+    fn limits_enforced() {
+        let e = engine();
+        let u = Usage::from_bits(usage::ENCRYPT | usage::DECRYPT).unwrap();
+        let k = e.generate_key(Alg::Aes256Gcm, u, "").unwrap();
+        let big = vec![0u8; kms_wire::msg::MAX_PLAINTEXT + 1];
+        assert_eq!(
+            e.aead_encrypt(&k.blob, &big, b""),
+            Err(Error::LimitExceeded)
+        );
+        let ok = vec![0u8; kms_wire::msg::MAX_PLAINTEXT];
+        let ct = e.aead_encrypt(&k.blob, &ok, b"").unwrap();
+        assert!(ct.len() <= kms_wire::msg::MAX_CIPHERTEXT);
+        assert_eq!(
+            e.aead_decrypt(&k.blob, &ct[..10], b""),
+            Err(Error::CryptoFailure)
+        );
+        let big_aad = vec![0u8; kms_wire::msg::MAX_AAD + 1];
+        assert_eq!(
+            e.aead_encrypt(&k.blob, b"x", &big_aad),
+            Err(Error::LimitExceeded)
+        );
+    }
+}

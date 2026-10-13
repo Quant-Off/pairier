@@ -9,7 +9,7 @@ rust-version = "1.95"
 publish = false
 
 [workspace.dependencies]
-kms-engine = { path = "crates/kms-engine" }
+kms-engine = { path = "crates/kms-engine", default-features = false }
 kms-wire = { path = "crates/kms-wire" }
 kms-sys = { path = "crates/kms-sys" }
 
