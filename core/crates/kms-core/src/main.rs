@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::print_stderr)]
+#![allow(clippy::print_stderr, clippy::print_stdout)]
 
 mod args;
 mod rootfile;
@@ -9,6 +9,8 @@ mod transport;
 use std::process::ExitCode;
 
 use kms_engine::Engine;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 use crate::args::{Action, Config, RootSource};
 
@@ -36,6 +38,16 @@ fn run(argv: &[String]) -> Result<(), String> {
             Ok(())
         }
         Action::Serve(cfg) => serve(&cfg),
+        Action::Version => {
+            println!(
+                "kms-core {VERSION} ({} {}, fips={}, pqc={})",
+                kms_engine::ENGINE_NAME,
+                kms_engine::ENGINE_VERSION,
+                Engine::fips_mode(),
+                cfg!(feature = "pqc")
+            );
+            Ok(())
+        }
     }
 }
 
@@ -79,7 +91,7 @@ fn serve(cfg: &Config) -> Result<(), String> {
 
     let engine = Engine::new(root, cfg.pqc);
     log(&format!(
-        "serving peer pid {} (fips={}, pqc={})",
+        "{VERSION} serving peer pid {} (fips={}, pqc={})",
         cred.pid.map_or_else(|| "?".to_owned(), |p| p.to_string()),
         Engine::fips_mode(),
         engine.pqc_available()
