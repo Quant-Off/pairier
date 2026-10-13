@@ -382,3 +382,156 @@ impl<'a> Message<'a> for RandomResponse<'a> {
         })
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyInspectRequest<'a> {
+    pub key_blob: &'a [u8],
+}
+
+impl<'a> Message<'a> for KeyInspectRequest<'a> {
+    const OP: Op = Op::KeyInspect;
+
+    fn encode(&self, w: &mut Writer) -> Result<(), Error> {
+        w.write_bytes(self.key_blob)
+    }
+
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        Ok(Self {
+            key_blob: r.read_bytes(MAX_KEY_BLOB)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyInspectResponse<'a> {
+    pub alg: u16,
+    pub usage: u32,
+    pub key_id: [u8; KEY_ID_LEN],
+    pub label: &'a str,
+}
+
+impl<'a> Message<'a> for KeyInspectResponse<'a> {
+    const OP: Op = Op::KeyInspect;
+
+    fn encode(&self, w: &mut Writer) -> Result<(), Error> {
+        w.write_u16(self.alg)?;
+        w.write_u32(self.usage)?;
+        w.write_bytes(&self.key_id)?;
+        w.write_str(self.label)
+    }
+
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        Ok(Self {
+            alg: r.read_u16()?,
+            usage: r.read_u32()?,
+            key_id: r.read_array::<KEY_ID_LEN>()?,
+            label: r.read_str(MAX_LABEL)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyExportRequest<'a> {
+    pub key_blob: &'a [u8],
+    pub kem_alg: u16,
+    pub recipient_public_key: &'a [u8],
+    pub usage: u32,
+    pub context: &'a [u8],
+}
+
+impl<'a> Message<'a> for KeyExportRequest<'a> {
+    const OP: Op = Op::KeyExport;
+
+    fn encode(&self, w: &mut Writer) -> Result<(), Error> {
+        w.write_bytes(self.key_blob)?;
+        w.write_u16(self.kem_alg)?;
+        w.write_bytes(self.recipient_public_key)?;
+        w.write_u32(self.usage)?;
+        w.write_bytes(self.context)
+    }
+
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        Ok(Self {
+            key_blob: r.read_bytes(MAX_KEY_BLOB)?,
+            kem_alg: r.read_u16()?,
+            recipient_public_key: r.read_bytes(MAX_PUBLIC_KEY)?,
+            usage: r.read_u32()?,
+            context: r.read_bytes(MAX_CONTEXT)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyExportResponse<'a> {
+    pub package: &'a [u8],
+}
+
+impl<'a> Message<'a> for KeyExportResponse<'a> {
+    const OP: Op = Op::KeyExport;
+
+    fn encode(&self, w: &mut Writer) -> Result<(), Error> {
+        w.write_bytes(self.package)
+    }
+
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        Ok(Self {
+            package: r.read_bytes(MAX_PACKAGE)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyImportRequest<'a> {
+    pub kem_key_blob: &'a [u8],
+    pub package: &'a [u8],
+    pub context: &'a [u8],
+}
+
+impl<'a> Message<'a> for KeyImportRequest<'a> {
+    const OP: Op = Op::KeyImport;
+
+    fn encode(&self, w: &mut Writer) -> Result<(), Error> {
+        w.write_bytes(self.kem_key_blob)?;
+        w.write_bytes(self.package)?;
+        w.write_bytes(self.context)
+    }
+
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        Ok(Self {
+            kem_key_blob: r.read_bytes(MAX_KEY_BLOB)?,
+            package: r.read_bytes(MAX_PACKAGE)?,
+            context: r.read_bytes(MAX_CONTEXT)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyImportResponse<'a> {
+    pub key_id: [u8; KEY_ID_LEN],
+    pub key_blob: &'a [u8],
+    pub alg: u16,
+    pub usage: u32,
+    pub label: &'a str,
+}
+
+impl<'a> Message<'a> for KeyImportResponse<'a> {
+    const OP: Op = Op::KeyImport;
+
+    fn encode(&self, w: &mut Writer) -> Result<(), Error> {
+        w.write_bytes(&self.key_id)?;
+        w.write_bytes(self.key_blob)?;
+        w.write_u16(self.alg)?;
+        w.write_u32(self.usage)?;
+        w.write_str(self.label)
+    }
+
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        Ok(Self {
+            key_id: r.read_array::<KEY_ID_LEN>()?,
+            key_blob: r.read_bytes(MAX_KEY_BLOB)?,
+            alg: r.read_u16()?,
+            usage: r.read_u32()?,
+            label: r.read_str(MAX_LABEL)?,
+        })
+    }
+}

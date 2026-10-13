@@ -86,16 +86,20 @@ const (
 	OpHello       Op = 0x0001
 	OpPing        Op = 0x0002
 	OpKeyGenerate Op = 0x0010
+	OpKeyInspect  Op = 0x0011
 	OpAeadEncrypt Op = 0x0020
 	OpAeadDecrypt Op = 0x0021
 	OpSign        Op = 0x0022
 	OpVerify      Op = 0x0023
+	OpKeyExport   Op = 0x0030
+	OpKeyImport   Op = 0x0031
 	OpRandom      Op = 0x0040
 )
 
 func (o Op) Known() bool {
 	switch o {
-	case OpHello, OpPing, OpKeyGenerate, OpAeadEncrypt, OpAeadDecrypt, OpSign, OpVerify, OpRandom:
+	case OpHello, OpPing, OpKeyGenerate, OpKeyInspect, OpAeadEncrypt, OpAeadDecrypt, OpSign, OpVerify,
+		OpKeyExport, OpKeyImport, OpRandom:
 		return true
 	default:
 		return false

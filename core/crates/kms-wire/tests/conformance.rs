@@ -8,8 +8,10 @@
 
 use kms_wire::msg::{
     AeadDecryptRequest, AeadDecryptResponse, AeadEncryptRequest, AeadEncryptResponse, HelloRequest,
-    HelloResponse, KeyGenerateRequest, KeyGenerateResponse, Message, PingRequest, PingResponse,
-    RandomRequest, RandomResponse, SignRequest, SignResponse, VerifyRequest, VerifyResponse,
+    HelloResponse, KeyExportRequest, KeyExportResponse, KeyGenerateRequest, KeyGenerateResponse,
+    KeyImportRequest, KeyImportResponse, KeyInspectRequest, KeyInspectResponse, Message,
+    PingRequest, PingResponse, RandomRequest, RandomResponse, SignRequest, SignResponse,
+    VerifyRequest, VerifyResponse,
 };
 use kms_wire::{Error, HEADER_LEN, Header, Kind, Op, Status};
 
@@ -44,6 +46,12 @@ fn roundtrip(op: u16, kind: Kind, body: &[u8]) -> Result<Vec<u8>, Error> {
         (Op::Ping, Kind::Response) => PingResponse::decode_body(body)?.encode_body(),
         (Op::KeyGenerate, Kind::Request) => KeyGenerateRequest::decode_body(body)?.encode_body(),
         (Op::KeyGenerate, Kind::Response) => KeyGenerateResponse::decode_body(body)?.encode_body(),
+        (Op::KeyInspect, Kind::Request) => KeyInspectRequest::decode_body(body)?.encode_body(),
+        (Op::KeyInspect, Kind::Response) => KeyInspectResponse::decode_body(body)?.encode_body(),
+        (Op::KeyExport, Kind::Request) => KeyExportRequest::decode_body(body)?.encode_body(),
+        (Op::KeyExport, Kind::Response) => KeyExportResponse::decode_body(body)?.encode_body(),
+        (Op::KeyImport, Kind::Request) => KeyImportRequest::decode_body(body)?.encode_body(),
+        (Op::KeyImport, Kind::Response) => KeyImportResponse::decode_body(body)?.encode_body(),
         (Op::AeadEncrypt, Kind::Request) => AeadEncryptRequest::decode_body(body)?.encode_body(),
         (Op::AeadEncrypt, Kind::Response) => AeadEncryptResponse::decode_body(body)?.encode_body(),
         (Op::AeadDecrypt, Kind::Request) => AeadDecryptRequest::decode_body(body)?.encode_body(),

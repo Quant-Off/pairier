@@ -4,8 +4,10 @@ use std::io::{self, Read, Write};
 use kms_engine::{Alg, Engine, Usage};
 use kms_wire::msg::{
     AeadDecryptRequest, AeadDecryptResponse, AeadEncryptRequest, AeadEncryptResponse, HelloRequest,
-    HelloResponse, KeyGenerateRequest, KeyGenerateResponse, Message, PingRequest, PingResponse,
-    RandomRequest, RandomResponse, SignRequest, SignResponse, VerifyRequest, VerifyResponse,
+    HelloResponse, KeyExportRequest, KeyExportResponse, KeyGenerateRequest, KeyGenerateResponse,
+    KeyImportRequest, KeyImportResponse, KeyInspectRequest, KeyInspectResponse, Message,
+    PingRequest, PingResponse, RandomRequest, RandomResponse, SignRequest, SignResponse,
+    VerifyRequest, VerifyResponse,
 };
 use kms_wire::{HEADER_LEN, Header, Kind, Op, PROTOCOL_VERSION, Status};
 
@@ -109,6 +111,9 @@ impl Server {
             Op::Hello => self.hello(body)?,
             Op::Ping => ping(body),
             Op::KeyGenerate => self.key_generate(body),
+            Op::KeyInspect => self.key_inspect(body),
+            Op::KeyExport => self.key_export(body),
+            Op::KeyImport => self.key_import(body),
             Op::AeadEncrypt => self.aead_encrypt(body),
             Op::AeadDecrypt => self.aead_decrypt(body),
             Op::Sign => self.sign(body),
@@ -157,6 +162,49 @@ impl Server {
             key_id: k.key_id,
             key_blob: &k.blob,
             public_key: &k.public_key,
+        })
+    }
+
+    fn key_inspect(&self, body: &[u8]) -> Result<Vec<u8>, Status> {
+        let req = decode::<KeyInspectRequest<'_>>(body)?;
+        let info = self.engine.inspect(req.key_blob).map_err(Status::from)?;
+        encode(&KeyInspectResponse {
+            alg: info.alg.wire_id(),
+            usage: info.usage.bits(),
+            key_id: info.key_id,
+            label: &info.label,
+        })
+    }
+
+    fn key_export(&self, body: &[u8]) -> Result<Vec<u8>, Status> {
+        let req = decode::<KeyExportRequest<'_>>(body)?;
+        let kem_alg = Alg::try_from(req.kem_alg).map_err(Status::from)?;
+        let usage = Usage::from_bits(req.usage).map_err(Status::from)?;
+        let package = self
+            .engine
+            .export_key(
+                req.key_blob,
+                kem_alg,
+                req.recipient_public_key,
+                usage,
+                req.context,
+            )
+            .map_err(Status::from)?;
+        encode(&KeyExportResponse { package: &package })
+    }
+
+    fn key_import(&self, body: &[u8]) -> Result<Vec<u8>, Status> {
+        let req = decode::<KeyImportRequest<'_>>(body)?;
+        let imported = self
+            .engine
+            .import_key(req.kem_key_blob, req.package, req.context)
+            .map_err(Status::from)?;
+        encode(&KeyImportResponse {
+            key_id: imported.key_id,
+            key_blob: &imported.blob,
+            alg: imported.alg.wire_id(),
+            usage: imported.usage.bits(),
+            label: &imported.label,
         })
     }
 
@@ -230,8 +278,10 @@ mod tests {
     use kms_engine::{Engine, RootKey};
     use kms_wire::msg::{
         AeadDecryptRequest, AeadDecryptResponse, AeadEncryptRequest, AeadEncryptResponse,
-        HelloRequest, HelloResponse, KeyGenerateRequest, KeyGenerateResponse, Message, PingRequest,
-        RandomRequest, RandomResponse, SignRequest, SignResponse, VerifyRequest, VerifyResponse,
+        HelloRequest, HelloResponse, KeyExportRequest, KeyExportResponse, KeyGenerateRequest,
+        KeyGenerateResponse, KeyImportRequest, KeyImportResponse, KeyInspectRequest,
+        KeyInspectResponse, Message, PingRequest, RandomRequest, RandomResponse, SignRequest,
+        SignResponse, VerifyRequest, VerifyResponse,
     };
     use kms_wire::{Header, Kind, Op, PROTOCOL_VERSION, Status, alg, usage};
 
@@ -467,5 +517,163 @@ mod tests {
             Status::CapabilityDisabled
         };
         assert_eq!(h.status, expect);
+    }
+
+    #[test]
+    fn key_exchange_between_two_cores() {
+        let mut a = server();
+        let mut b = server();
+        hello(&mut a);
+        hello(&mut b);
+        let kem_alg = if cfg!(feature = "pqc") {
+            alg::HYBRID_P256_ML_KEM_768
+        } else {
+            alg::DHKEM_P256
+        };
+        let (h, body) = call(
+            &mut b,
+            2,
+            &KeyGenerateRequest {
+                alg: kem_alg,
+                usage: usage::DECAPSULATE,
+                label: "b/kem",
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::Ok);
+        let kem = KeyGenerateResponse::decode_body(&body).unwrap();
+        let kem_blob = kem.key_blob.to_vec();
+        let kem_pk = kem.public_key.to_vec();
+
+        let (h, body) = call(
+            &mut a,
+            2,
+            &KeyGenerateRequest {
+                alg: alg::AES_256_GCM,
+                usage: usage::ENCRYPT | usage::DECRYPT | usage::EXPORT,
+                label: "a/shared",
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::Ok);
+        let k = KeyGenerateResponse::decode_body(&body).unwrap();
+        let blob = k.key_blob.to_vec();
+        let key_id = k.key_id;
+
+        let (h, body) = call(&mut a, 3, &KeyInspectRequest { key_blob: &blob }).unwrap();
+        assert_eq!(h.status, Status::Ok);
+        let info = KeyInspectResponse::decode_body(&body).unwrap();
+        assert_eq!(info.alg, alg::AES_256_GCM);
+        assert_eq!(info.usage, usage::ENCRYPT | usage::DECRYPT | usage::EXPORT);
+        assert_eq!(info.key_id, key_id);
+        assert_eq!(info.label, "a/shared");
+        let (h, _) = call(&mut b, 3, &KeyInspectRequest { key_blob: &blob }).unwrap();
+        assert_eq!(h.status, Status::InvalidKeyBlob);
+
+        let (h, body) = call(
+            &mut a,
+            4,
+            &AeadEncryptRequest {
+                key_blob: &blob,
+                plaintext: b"for b",
+                aad: b"",
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::Ok);
+        let ct = AeadEncryptResponse::decode_body(&body)
+            .unwrap()
+            .ciphertext
+            .to_vec();
+
+        let ctx = b"from=a;to=b";
+        let (h, body) = call(
+            &mut a,
+            5,
+            &KeyExportRequest {
+                key_blob: &blob,
+                kem_alg,
+                recipient_public_key: &kem_pk,
+                usage: usage::DECRYPT,
+                context: ctx,
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::Ok);
+        let package = KeyExportResponse::decode_body(&body)
+            .unwrap()
+            .package
+            .to_vec();
+
+        let (h, _) = call(
+            &mut b,
+            4,
+            &KeyImportRequest {
+                kem_key_blob: &kem_blob,
+                package: &package,
+                context: b"from=c;to=b",
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::InvalidArgument);
+
+        let (h, body) = call(
+            &mut b,
+            5,
+            &KeyImportRequest {
+                kem_key_blob: &kem_blob,
+                package: &package,
+                context: ctx,
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::Ok);
+        let imported = KeyImportResponse::decode_body(&body).unwrap();
+        assert_eq!(imported.key_id, key_id);
+        assert_eq!(imported.alg, alg::AES_256_GCM);
+        assert_eq!(imported.usage, usage::DECRYPT);
+        assert_eq!(imported.label, "a/shared");
+        let imported_blob = imported.key_blob.to_vec();
+
+        let (h, body) = call(
+            &mut b,
+            6,
+            &AeadDecryptRequest {
+                key_blob: &imported_blob,
+                ciphertext: &ct,
+                aad: b"",
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::Ok);
+        assert_eq!(
+            AeadDecryptResponse::decode_body(&body).unwrap().plaintext,
+            b"for b"
+        );
+        let (h, _) = call(
+            &mut b,
+            7,
+            &AeadEncryptRequest {
+                key_blob: &imported_blob,
+                plaintext: b"x",
+                aad: b"",
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::UsageDenied);
+
+        let (h, _) = call(
+            &mut a,
+            6,
+            &KeyExportRequest {
+                key_blob: &blob,
+                kem_alg: alg::AES_256_GCM,
+                recipient_public_key: &kem_pk,
+                usage: usage::DECRYPT,
+                context: ctx,
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::InvalidArgument);
     }
 }
