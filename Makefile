@@ -19,6 +19,8 @@ export GOFLAGS     := -mod=vendor -trimpath
 export CGO_ENABLED := 0
 
 RUST_TOOLCHAIN := $(shell sed -n 's/^channel = "\(.*\)"/\1/p' $(CORE_DIR)/rust-toolchain.toml)
+VERSION        := $(shell sed -n 's/^version = "\(.*\)"/\1/p' $(CORE_DIR)/Cargo.toml | head -1)
+GO_LDFLAGS     := -s -w -X main.version=$(VERSION)
 CARGO_NET      := $(CARGO) +$(RUST_TOOLCHAIN)
 CORE_MANIFEST  := --manifest-path $(CORE_DIR)/Cargo.toml
 GO_NET         := GOPROXY=https://proxy.golang.org,direct GOFLAGS=-trimpath $(GO)
@@ -33,7 +35,7 @@ build-core:
 	cd $(CORE_DIR) && $(CARGO) build --release --frozen -p kms-core $(CORE_FLAGS)
 
 build-host:
-	cd $(HOST_DIR) && $(GO) build -o bin/ ./cmd/...
+	cd $(HOST_DIR) && $(GO) build -ldflags "$(GO_LDFLAGS)" -o bin/ ./cmd/...
 
 test: test-core test-host
 
