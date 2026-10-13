@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -152,7 +153,7 @@ func TestExchangeBetweenNodes(t *testing.T) {
 	}
 	defer reopened.Close()
 	keys, err := reopened.Keys()
-	if err != nil || len(keys) != 3 {
+	if err != nil || len(keys) != 4 {
 		t.Fatalf("keys after reopen %d %v", len(keys), err)
 	}
 	if _, err := reopened.Key(ctx, k.KeyID); err != nil {
@@ -272,5 +273,48 @@ func TestPQCNodes(t *testing.T) {
 	var se *core.StatusError
 	if _, err := classic.AddMember(ctx, rawA, fp); !errors.As(err, &se) || se.Status != wire.StatusCapabilityDisabled {
 		t.Fatalf("node without pqc must refuse a pqc card, got %v", err)
+	}
+}
+
+func TestTLSMaterialAndPeerLookup(t *testing.T) {
+	ctx := context.Background()
+	alice, aliceOpts := initNode(t, "alice", false)
+	bob, _ := initNode(t, "bob", false)
+	if alice.TLSCertificate().Leaf == nil || len(alice.TLSPublicKey()) == 0 {
+		t.Fatal("tls material missing after init")
+	}
+	card, _, err := alice.Card(ctx)
+	if err != nil || !bytes.Equal(card.TLSPublicKey, alice.TLSPublicKey()) {
+		t.Fatalf("card tls key mismatch: %v", err)
+	}
+	pair(t, alice, bob)
+	found, err := alice.MemberByTLSKey(ctx, bob.TLSPublicKey())
+	if err != nil || found.MemberID != "bob" {
+		t.Fatalf("lookup: %+v %v", found, err)
+	}
+	if _, err := alice.MemberByTLSKey(ctx, alice.TLSPublicKey()); !errors.Is(err, ErrUnknownMember) {
+		t.Fatalf("own key resolved to a member: %v", err)
+	}
+	if _, err := alice.MemberByTLSKey(ctx, nil); !errors.Is(err, ErrUnknownMember) {
+		t.Fatalf("empty key resolved: %v", err)
+	}
+	spki := alice.TLSPublicKey()
+	if err := alice.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, aliceOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if !bytes.Equal(reopened.TLSPublicKey(), spki) {
+		t.Fatal("tls key changed after reopen")
+	}
+	if reopened.TLSCertificate().Leaf.Subject.CommonName != "alice" {
+		t.Fatal("certificate subject")
+	}
+	keys, _ := reopened.Keys()
+	if len(keys) != 3 {
+		t.Fatalf("expected identity, kem and tls-wrap keys, got %d", len(keys))
 	}
 }

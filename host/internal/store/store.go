@@ -24,6 +24,7 @@ const (
 	membersDir = "members"
 	inboxDir   = "inbox"
 	nodeFile   = "node.json"
+	tlsFile    = "tls.json"
 	rootFile   = "root.key"
 	auditFile  = "audit.log"
 )
@@ -74,6 +75,13 @@ type Node struct {
 	IdentityKeyID string `json:"identity_key_id"`
 	KemKeyID      string `json:"kem_key_id"`
 	PQC           bool   `json:"pqc"`
+	CreatedAt     int64  `json:"created_at"`
+}
+
+type TLSRecord struct {
+	Cert          []byte `json:"cert"`
+	WrapKeyID     string `json:"wrap_key_id"`
+	KeyCiphertext []byte `json:"key_ciphertext"`
 	CreatedAt     int64  `json:"created_at"`
 }
 
@@ -258,6 +266,27 @@ func (s *Store) GetNode() (*Node, error) {
 		return nil, ErrCorrupt
 	}
 	return &n, nil
+}
+
+func (s *Store) PutTLS(r *TLSRecord) error {
+	if !ValidKeyID(r.WrapKeyID) || len(r.Cert) == 0 || len(r.KeyCiphertext) == 0 {
+		return ErrBadID
+	}
+	return s.writeNew(tlsFile, r)
+}
+
+func (s *Store) GetTLS() (*TLSRecord, error) {
+	var r TLSRecord
+	if err := s.read(tlsFile, &r); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrNotInited
+		}
+		return nil, err
+	}
+	if !ValidKeyID(r.WrapKeyID) || len(r.Cert) == 0 || len(r.KeyCiphertext) == 0 {
+		return nil, ErrCorrupt
+	}
+	return &r, nil
 }
 
 func (s *Store) PutInbox(r *InboxRecord) error {

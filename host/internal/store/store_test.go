@@ -157,6 +157,16 @@ func TestMembersNodeAndInbox(t *testing.T) {
 	if err != nil || got.MemberID != "alice" || !got.PQC || got.KemKeyID != n.KemKeyID {
 		t.Fatalf("node: %+v %v", got, err)
 	}
+	if _, err := s.GetTLS(); !errors.Is(err, ErrNotInited) {
+		t.Fatalf("expected ErrNotInited, got %v", err)
+	}
+	tr := &TLSRecord{Cert: []byte("cert"), WrapKeyID: KeyIDString([16]byte{4}), KeyCiphertext: []byte("ct"), CreatedAt: 1}
+	if err := s.PutTLS(tr); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetTLS(); err != nil || string(got.Cert) != "cert" || got.WrapKeyID != tr.WrapKeyID {
+		t.Fatalf("tls: %+v %v", got, err)
+	}
 	env := []byte("envelope")
 	rec := &InboxRecord{ID: InboxID(env), Envelope: env, ReceivedAt: 9}
 	if err := s.PutInbox(rec); err != nil {

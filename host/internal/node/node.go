@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -49,6 +50,7 @@ type Node struct {
 	info     *store.Node
 	identity *store.KeyRecord
 	kem      *store.KeyRecord
+	tls      tls.Certificate
 }
 
 func (n *Node) audit(event string, fields map[string]string, err error) error {
@@ -110,6 +112,10 @@ func Init(ctx context.Context, o Options, memberID string, pqc bool) (*Node, err
 	}
 	n := &Node{opts: o, st: st, core: c, log: log}
 	if err := n.createIdentity(ctx, memberID, pqc); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	if err := n.createTLS(ctx); err != nil {
 		_ = n.Close()
 		return nil, err
 	}
@@ -197,6 +203,10 @@ func Open(ctx context.Context, o Options) (*Node, error) {
 		len(n.identity.PublicKey) == 0 || len(n.kem.PublicKey) == 0 {
 		_ = n.Close()
 		return nil, ErrMetadata
+	}
+	if err := n.loadTLS(ctx); err != nil {
+		_ = n.Close()
+		return nil, err
 	}
 	if err := n.audit("node.open", map[string]string{"member": info.MemberID, "fips": fmt.Sprint(c.FIPS()), "pqc": fmt.Sprint(c.PQC())}, nil); err != nil {
 		_ = n.Close()
@@ -288,6 +298,7 @@ func (n *Node) Card(ctx context.Context) (*exchange.Card, []byte, error) {
 		IdentityPublicKey: n.identity.PublicKey,
 		KemAlg:            n.kem.Alg,
 		KemPublicKey:      n.kem.PublicKey,
+		TLSPublicKey:      n.TLSPublicKey(),
 		CreatedAt:         uint64(n.info.CreatedAt),
 	}
 	if err := exchange.SignCard(ctx, n.core, n.identity.Blob, card); err != nil {

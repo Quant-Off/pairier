@@ -76,7 +76,7 @@ func TestEnvelopeAndCardEncoding(t *testing.T) {
 		t.Fatal("non-signature alg accepted")
 	}
 
-	card := &Card{MemberID: "bob", IdentityAlg: wire.AlgEd25519, IdentityPublicKey: make([]byte, 32), KemAlg: wire.AlgDHKEMP256, KemPublicKey: make([]byte, 65), CreatedAt: 7, Signature: []byte("s")}
+	card := &Card{MemberID: "bob", IdentityAlg: wire.AlgEd25519, IdentityPublicKey: make([]byte, 32), KemAlg: wire.AlgDHKEMP256, KemPublicKey: make([]byte, 65), TLSPublicKey: make([]byte, 91), CreatedAt: 7, Signature: []byte("s")}
 	cb2, err := card.Encode()
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +97,16 @@ func TestEnvelopeAndCardEncoding(t *testing.T) {
 	fp3, _ := dc.Fingerprint()
 	if fp3 == fp1 {
 		t.Fatal("fingerprint ignores kem key")
+	}
+	dc.KemPublicKey[0] ^= 1
+	dc.TLSPublicKey[0] ^= 1
+	fp4, _ := dc.Fingerprint()
+	if fp4 == fp1 {
+		t.Fatal("fingerprint ignores tls key")
+	}
+	dc.TLSPublicKey = nil
+	if _, err := dc.Encode(); !errors.Is(err, ErrFormat) {
+		t.Fatal("missing tls key accepted")
 	}
 	card.KemAlg = wire.AlgEd25519
 	if _, err := card.Encode(); !errors.Is(err, ErrAlgorithm) {
@@ -143,7 +153,7 @@ func TestSignedEnvelopeAndCardWithRealCore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	card := &Card{MemberID: "bob", IdentityAlg: sigAlg, IdentityPublicKey: bid.PublicKey, KemAlg: kemAlg, KemPublicKey: bkem.PublicKey, CreatedAt: 1}
+	card := &Card{MemberID: "bob", IdentityAlg: sigAlg, IdentityPublicKey: bid.PublicKey, KemAlg: kemAlg, KemPublicKey: bkem.PublicKey, TLSPublicKey: []byte("spki"), CreatedAt: 1}
 	if err := SignCard(ctx, b, bid.Blob, card); err != nil {
 		t.Fatal(err)
 	}

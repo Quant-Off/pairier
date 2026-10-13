@@ -12,7 +12,7 @@ import (
 
 const (
 	CardVersion = 1
-	MaxCard     = 4 + 1 + 4 + MaxMemberID + 2 + 4 + wire.MaxPublicKey + 2 + 4 + wire.MaxPublicKey + 8 + 4 + wire.MaxSignature
+	MaxCard     = 4 + 1 + 4 + MaxMemberID + 2 + 4 + wire.MaxPublicKey + 2 + 4 + wire.MaxPublicKey + 4 + wire.MaxPublicKey + 8 + 4 + wire.MaxSignature
 )
 
 var cardMagic = [4]byte{'K', 'I', 'D', '1'}
@@ -23,6 +23,7 @@ type Card struct {
 	IdentityPublicKey []byte
 	KemAlg            uint16
 	KemPublicKey      []byte
+	TLSPublicKey      []byte
 	CreatedAt         uint64
 	Signature         []byte
 }
@@ -36,6 +37,7 @@ func (c *Card) validate() error {
 	}
 	if len(c.IdentityPublicKey) == 0 || len(c.IdentityPublicKey) > wire.MaxPublicKey ||
 		len(c.KemPublicKey) == 0 || len(c.KemPublicKey) > wire.MaxPublicKey ||
+		len(c.TLSPublicKey) == 0 || len(c.TLSPublicKey) > wire.MaxPublicKey ||
 		len(c.Signature) > wire.MaxSignature {
 		return ErrFormat
 	}
@@ -53,6 +55,7 @@ func (c *Card) signedBytes() ([]byte, error) {
 	w.Bytes(c.IdentityPublicKey)
 	w.U16(c.KemAlg)
 	w.Bytes(c.KemPublicKey)
+	w.Bytes(c.TLSPublicKey)
 	w.U64(c.CreatedAt)
 	body, err := w.Finish()
 	if err != nil {
@@ -98,6 +101,9 @@ func DecodeCard(b []byte) (*Card, error) {
 		return nil, ErrFormat
 	}
 	if c.KemPublicKey, err = r.Bytes(wire.MaxPublicKey); err != nil {
+		return nil, ErrFormat
+	}
+	if c.TLSPublicKey, err = r.Bytes(wire.MaxPublicKey); err != nil {
 		return nil, ErrFormat
 	}
 	if c.CreatedAt, err = r.U64(); err != nil {

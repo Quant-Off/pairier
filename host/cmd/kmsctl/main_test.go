@@ -128,7 +128,7 @@ func TestEndToEndExchange(t *testing.T) {
 	if !strings.Contains(info, "origin\talice") || !strings.Contains(info, "usage\tdecrypt\n") {
 		t.Fatalf("info %q", info)
 	}
-	if list := must(nil, "--dir", bob, "key", "list"); strings.Count(list, "\n") != 3 {
+	if list := must(nil, "--dir", bob, "key", "list"); strings.Count(list, "\n") != 4 {
 		t.Fatalf("bob key list %q", list)
 	}
 }
