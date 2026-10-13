@@ -23,6 +23,10 @@ pub const ENGINE_NAME: &str = "kms-engine";
 pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const AEAD_OVERHEAD: usize = aead::OVERHEAD;
 
+pub fn fill_random(out: &mut [u8]) -> Result<(), Error> {
+    aws_lc_rs::rand::fill(out).map_err(|_| Error::Internal)
+}
+
 #[derive(Debug)]
 pub struct GeneratedKey {
     pub key_id: [u8; KEY_ID_LEN],
