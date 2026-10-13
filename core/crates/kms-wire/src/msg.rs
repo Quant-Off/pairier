@@ -15,6 +15,8 @@ pub const MAX_PLAINTEXT: usize = 64 * 1024;
 pub const MAX_CIPHERTEXT: usize = MAX_PLAINTEXT + 64;
 pub const MAX_MESSAGE: usize = 64 * 1024;
 pub const MAX_RANDOM: u32 = 1024;
+pub const MAX_CONTEXT: usize = 1024;
+pub const MAX_PACKAGE: usize = 8 * 1024;
 
 pub trait Message<'a>: Sized {
     const OP: Op;

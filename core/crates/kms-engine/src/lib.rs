@@ -4,6 +4,7 @@ mod aead;
 mod alg;
 mod blob;
 mod error;
+mod export;
 mod kdf;
 mod kem;
 mod root;
@@ -38,6 +39,15 @@ pub struct KeyInfo {
     pub alg: Alg,
     pub usage: Usage,
     pub key_id: [u8; KEY_ID_LEN],
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedKey {
+    pub key_id: [u8; KEY_ID_LEN],
+    pub blob: Vec<u8>,
+    pub alg: Alg,
+    pub usage: Usage,
     pub label: String,
 }
 
@@ -204,6 +214,68 @@ impl Engine {
             return Err(Error::InvalidArgument);
         }
         kem::encapsulate(alg, encapsulation_key)
+    }
+
+    pub fn export_key(
+        &self,
+        blob: &[u8],
+        kem_alg: Alg,
+        recipient_public_key: &[u8],
+        usage: Usage,
+        context: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        self.check_enabled(kem_alg)?;
+        if kem_alg.kind() != AlgKind::Kem {
+            return Err(Error::InvalidArgument);
+        }
+        if context.len() > kms_wire::msg::MAX_CONTEXT {
+            return Err(Error::LimitExceeded);
+        }
+        let k = self.open_for(blob, AlgKind::Symmetric, kms_wire::usage::EXPORT)?;
+        usage.check_for(k.alg)?;
+        if !usage.is_subset_of(k.usage) {
+            return Err(Error::UsageDenied);
+        }
+        let e = export::Export {
+            kem_alg,
+            alg: k.alg,
+            usage,
+            key_id: k.key_id,
+            label: &k.label,
+            context,
+        };
+        export::seal(&e, recipient_public_key, &k.secret)
+    }
+
+    pub fn import_key(
+        &self,
+        kem_blob: &[u8],
+        package: &[u8],
+        context: &[u8],
+    ) -> Result<ImportedKey, Error> {
+        if package.len() > kms_wire::msg::MAX_PACKAGE || context.len() > kms_wire::msg::MAX_CONTEXT
+        {
+            return Err(Error::LimitExceeded);
+        }
+        let k = self.open_for(kem_blob, AlgKind::Kem, kms_wire::usage::DECAPSULATE)?;
+        let imported = export::open(k.alg, &k.secret, package, context)?;
+        if imported.alg.kind() != AlgKind::Symmetric || imported.secret.len() != aead::KEY_LEN {
+            return Err(Error::InvalidArgument);
+        }
+        let header = blob::Header {
+            alg: imported.alg,
+            usage: imported.usage,
+            key_id: imported.key_id,
+            label: &imported.label,
+        };
+        let blob = blob::seal(&self.root, &header, &imported.secret)?;
+        Ok(ImportedKey {
+            key_id: imported.key_id,
+            blob,
+            alg: imported.alg,
+            usage: imported.usage,
+            label: imported.label,
+        })
     }
 
     pub fn decapsulate(&self, blob: &[u8], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
@@ -440,6 +512,170 @@ mod tests {
         let off = Engine::new(RootKey::generate().unwrap(), false);
         assert_eq!(
             off.encapsulate(Alg::HybridP256MlKem768, &[0u8; 1249]),
+            Err(Error::CapabilityDisabled)
+        );
+    }
+
+    fn exchange_roundtrip(sender: &Engine, recipient: &Engine, kem_alg: Alg) {
+        let decap = Usage::from_bits(usage::DECAPSULATE).unwrap();
+        let kem = recipient.generate_key(kem_alg, decap, "kem").unwrap();
+        let full = Usage::from_bits(usage::ENCRYPT | usage::DECRYPT | usage::EXPORT).unwrap();
+        let k = sender.generate_key(Alg::Aes256Gcm, full, "shared").unwrap();
+        let ct = sender.aead_encrypt(&k.blob, b"payload", b"aad").unwrap();
+        let grant = Usage::from_bits(usage::DECRYPT).unwrap();
+        let ctx = b"from=a;to=b;t=1";
+        let pkg = sender
+            .export_key(&k.blob, kem_alg, &kem.public_key, grant, ctx)
+            .unwrap();
+        assert!(pkg.len() <= kms_wire::msg::MAX_PACKAGE);
+
+        let imp = recipient.import_key(&kem.blob, &pkg, ctx).unwrap();
+        assert_eq!(imp.key_id, k.key_id);
+        assert_eq!(imp.alg, Alg::Aes256Gcm);
+        assert_eq!(imp.usage, grant);
+        assert_eq!(imp.label, "shared");
+        assert_eq!(
+            recipient
+                .aead_decrypt(&imp.blob, &ct, b"aad")
+                .unwrap()
+                .as_slice(),
+            b"payload"
+        );
+        assert_eq!(
+            recipient.aead_encrypt(&imp.blob, b"x", b""),
+            Err(Error::UsageDenied)
+        );
+        assert_eq!(
+            recipient.export_key(&imp.blob, kem_alg, &kem.public_key, grant, ctx),
+            Err(Error::UsageDenied)
+        );
+        let info = recipient.inspect(&imp.blob).unwrap();
+        assert_eq!(info.key_id, k.key_id);
+        assert_eq!(info.usage, grant);
+
+        let pkg2 = sender
+            .export_key(&k.blob, kem_alg, &kem.public_key, grant, ctx)
+            .unwrap();
+        assert_ne!(pkg, pkg2);
+
+        assert_eq!(
+            recipient.import_key(&kem.blob, &pkg, b"from=a;to=c;t=1"),
+            Err(Error::InvalidArgument)
+        );
+        assert_eq!(
+            recipient.import_key(&kem.blob, &pkg, b""),
+            Err(Error::InvalidArgument)
+        );
+        let other = recipient.generate_key(kem_alg, decap, "kem2").unwrap();
+        assert_eq!(
+            recipient.import_key(&other.blob, &pkg, ctx),
+            Err(Error::CryptoFailure)
+        );
+        assert_eq!(
+            sender.import_key(&kem.blob, &pkg, ctx),
+            Err(Error::InvalidKeyBlob)
+        );
+        for i in 0..pkg.len() {
+            let mut t = pkg.clone();
+            t[i] ^= 0x01;
+            assert!(
+                recipient.import_key(&kem.blob, &t, ctx).is_err(),
+                "byte {i}"
+            );
+        }
+        assert!(
+            recipient
+                .import_key(&kem.blob, &pkg[..pkg.len() - 1], ctx)
+                .is_err()
+        );
+        let mut extended = pkg.clone();
+        extended.push(0);
+        assert!(recipient.import_key(&kem.blob, &extended, ctx).is_err());
+        assert_eq!(
+            recipient.import_key(&kem.blob, &[], ctx),
+            Err(Error::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn export_import_classical() {
+        let a = engine();
+        let b = engine();
+        exchange_roundtrip(&a, &b, Alg::DhkemP256);
+    }
+
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn export_import_pqc() {
+        let a = engine();
+        let b = engine();
+        for alg in [Alg::MlKem768, Alg::MlKem1024, Alg::HybridP256MlKem768] {
+            exchange_roundtrip(&a, &b, alg);
+        }
+    }
+
+    #[test]
+    fn export_enforces_usage_and_kinds() {
+        let a = engine();
+        let b = engine();
+        let decap = Usage::from_bits(usage::DECAPSULATE).unwrap();
+        let kem = b.generate_key(Alg::DhkemP256, decap, "").unwrap();
+        let ctx = b"ctx";
+
+        let no_export = Usage::from_bits(usage::ENCRYPT | usage::DECRYPT).unwrap();
+        let k = a.generate_key(Alg::Aes256Gcm, no_export, "").unwrap();
+        let grant = Usage::from_bits(usage::DECRYPT).unwrap();
+        assert_eq!(
+            a.export_key(&k.blob, Alg::DhkemP256, &kem.public_key, grant, ctx),
+            Err(Error::UsageDenied)
+        );
+
+        let exportable = Usage::from_bits(usage::DECRYPT | usage::EXPORT).unwrap();
+        let k = a.generate_key(Alg::Aes256Gcm, exportable, "").unwrap();
+        let escalate = Usage::from_bits(usage::ENCRYPT | usage::DECRYPT).unwrap();
+        assert_eq!(
+            a.export_key(&k.blob, Alg::DhkemP256, &kem.public_key, escalate, ctx),
+            Err(Error::UsageDenied)
+        );
+        let wrong_kind = Usage::from_bits(usage::SIGN).unwrap();
+        assert_eq!(
+            a.export_key(&k.blob, Alg::DhkemP256, &kem.public_key, wrong_kind, ctx),
+            Err(Error::InvalidArgument)
+        );
+        assert_eq!(
+            a.export_key(&k.blob, Alg::Aes256Gcm, &kem.public_key, grant, ctx),
+            Err(Error::InvalidArgument)
+        );
+        assert_eq!(
+            a.export_key(&k.blob, Alg::DhkemP256, &kem.public_key[1..], grant, ctx),
+            Err(Error::InvalidArgument)
+        );
+        let big = vec![0u8; kms_wire::msg::MAX_CONTEXT + 1];
+        assert_eq!(
+            a.export_key(&k.blob, Alg::DhkemP256, &kem.public_key, grant, &big),
+            Err(Error::LimitExceeded)
+        );
+        let pkg = a
+            .export_key(&k.blob, Alg::DhkemP256, &kem.public_key, grant, ctx)
+            .unwrap();
+        assert_eq!(b.import_key(&k.blob, &pkg, ctx), Err(Error::InvalidKeyBlob));
+        assert_eq!(
+            b.import_key(&kem.blob, &pkg, &big),
+            Err(Error::LimitExceeded)
+        );
+
+        let signer = a
+            .generate_key(Alg::Ed25519, Usage::from_bits(usage::SIGN).unwrap(), "")
+            .unwrap();
+        assert_eq!(
+            a.export_key(&signer.blob, Alg::DhkemP256, &kem.public_key, grant, ctx),
+            Err(Error::InvalidArgument)
+        );
+
+        let off = Engine::new(RootKey::generate().unwrap(), false);
+        let k2 = off.generate_key(Alg::Aes256Gcm, exportable, "").unwrap();
+        assert_eq!(
+            off.export_key(&k2.blob, Alg::HybridP256MlKem768, &[0u8; 1249], grant, ctx),
             Err(Error::CapabilityDisabled)
         );
     }
