@@ -29,6 +29,7 @@ var (
 	ErrNotSymmetric    = errors.New("node: only symmetric keys can be generated or exchanged")
 	ErrSignatureAlg    = errors.New("node: envelope signature algorithm differs from the member card")
 	ErrUsageNotAllowed = errors.New("node: usage not allowed for this key kind")
+	ErrSenderMismatch  = errors.New("node: envelope sender differs from the authenticated peer")
 )
 
 const SymmetricUsage = wire.UsageEncrypt | wire.UsageDecrypt | wire.UsageWrap | wire.UsageUnwrap | wire.UsageDerive | wire.UsageExport
@@ -426,25 +427,7 @@ func (n *Node) Receive(ctx context.Context, raw []byte) (*store.KeyRecord, error
 }
 
 func (n *Node) receive(ctx context.Context, raw []byte) (*store.KeyRecord, error) {
-	env, err := exchange.DecodeEnvelope(raw)
-	if err != nil {
-		return nil, err
-	}
-	peek, err := exchange.DecodeContext(env.Context)
-	if err != nil {
-		return nil, err
-	}
-	if peek.Recipient != n.info.MemberID {
-		return nil, ErrNotRecipient
-	}
-	card, err := n.Member(ctx, peek.Sender)
-	if err != nil {
-		return nil, err
-	}
-	if env.SigAlg != card.IdentityAlg {
-		return nil, ErrSignatureAlg
-	}
-	ectx, err := env.Verify(ctx, n.core, card.IdentityPublicKey)
+	env, ectx, err := n.verifyEnvelope(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -465,4 +448,103 @@ func (n *Node) receive(ctx context.Context, raw []byte) (*store.KeyRecord, error
 		return nil, err
 	}
 	return rec, nil
+}
+
+func (n *Node) verifyEnvelope(ctx context.Context, raw []byte) (*exchange.Envelope, *exchange.Context, error) {
+	env, err := exchange.DecodeEnvelope(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	peek, err := exchange.DecodeContext(env.Context)
+	if err != nil {
+		return nil, nil, err
+	}
+	if peek.Recipient != n.info.MemberID {
+		return nil, nil, ErrNotRecipient
+	}
+	card, err := n.Member(ctx, peek.Sender)
+	if err != nil {
+		return nil, nil, err
+	}
+	if env.SigAlg != card.IdentityAlg {
+		return nil, nil, ErrSignatureAlg
+	}
+	ectx, err := env.Verify(ctx, n.core, card.IdentityPublicKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return env, ectx, nil
+}
+
+func (n *Node) StoreInbox(ctx context.Context, raw []byte, from string) (*store.InboxRecord, error) {
+	rec, err := n.storeInbox(ctx, raw, from)
+	fields := map[string]string{"from": from, "envelope": store.InboxID(raw)}
+	if err := n.audit("inbox.put", fields, err); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (n *Node) storeInbox(ctx context.Context, raw []byte, from string) (*store.InboxRecord, error) {
+	_, ectx, err := n.verifyEnvelope(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	if ectx.Sender != from {
+		return nil, ErrSenderMismatch
+	}
+	rec := &store.InboxRecord{ID: store.InboxID(raw), Envelope: raw, ReceivedAt: n.opts.now().Unix()}
+	if err := n.st.PutInbox(rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+type InboxItem struct {
+	ID         string
+	Sender     string
+	SentAt     int64
+	ReceivedAt int64
+}
+
+func (n *Node) Inbox() ([]InboxItem, error) {
+	recs, err := n.st.ListInbox()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]InboxItem, 0, len(recs))
+	for _, r := range recs {
+		item := InboxItem{ID: r.ID, ReceivedAt: r.ReceivedAt}
+		if env, err := exchange.DecodeEnvelope(r.Envelope); err == nil {
+			if c, err := exchange.DecodeContext(env.Context); err == nil {
+				item.Sender = c.Sender
+				item.SentAt = int64(c.CreatedAt)
+			}
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (n *Node) Accept(ctx context.Context, id string) (*store.KeyRecord, error) {
+	rec, err := n.st.GetInbox(id)
+	if err != nil {
+		return nil, err
+	}
+	key, err := n.Receive(ctx, rec.Envelope)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.st.DeleteInbox(id); err != nil {
+		return nil, err
+	}
+	if err := n.audit("inbox.accept", map[string]string{"envelope": id, "key": key.KeyID}, nil); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+func (n *Node) Reject(ctx context.Context, id string) error {
+	err := n.st.DeleteInbox(id)
+	return n.audit("inbox.reject", map[string]string{"envelope": id}, err)
 }
