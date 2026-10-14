@@ -41,8 +41,8 @@ func run(args []string, stdout, stderr io.Writer, ready func(addr string)) int {
 	fs := flag.NewFlagSet("kmsd", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", "", "configuration file (json)")
-	dir := fs.String("dir", "", "node directory")
-	corePath := fs.String("core", "", "kms-core binary (default next to kmsd)")
+	dir := fs.String("dir", "", "node directory (default $KMS_DIR)")
+	corePath := fs.String("core", "", "kms-core binary (default $KMS_CORE or next to kmsd)")
 	listen := fs.String("listen", "", "listen address host:port")
 	allowUnlocked := fs.Bool("allow-unlocked-memory", runtime.GOOS == "darwin", "run the core without locked memory")
 	timeout := fs.Duration("timeout", defaultTimeout, "core call timeout")
@@ -78,11 +78,17 @@ func run(args []string, stdout, stderr io.Writer, ready func(addr string)) int {
 		}
 		s.node.Timeout = c.TimeoutDuration(*timeout)
 	}
-	if set["dir"] || s.node.Dir == "" {
+	if set["dir"] {
 		s.node.Dir = *dir
 	}
-	if set["core"] || s.node.CoreBinary == "" {
+	if s.node.Dir == "" {
+		s.node.Dir = os.Getenv("KMS_DIR")
+	}
+	if set["core"] {
 		s.node.CoreBinary = *corePath
+	}
+	if s.node.CoreBinary == "" {
+		s.node.CoreBinary = os.Getenv("KMS_CORE")
 	}
 	if set["listen"] {
 		s.listen = *listen
@@ -94,7 +100,7 @@ func run(args []string, stdout, stderr io.Writer, ready func(addr string)) int {
 		s.node.Timeout = *timeout
 	}
 	if s.node.Dir == "" {
-		fmt.Fprintln(stderr, "kmsd: --dir or config dir is required")
+		fmt.Fprintln(stderr, "kmsd: --dir, config dir or $KMS_DIR is required")
 		return 2
 	}
 	if s.node.CoreBinary == "" {

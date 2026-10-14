@@ -32,6 +32,35 @@ func TestFlagsAndVersion(t *testing.T) {
 	}
 }
 
+func TestEnvironmentDefaults(t *testing.T) {
+	t.Setenv("KMS_DIR", "")
+	t.Setenv("KMS_CORE", "")
+	var out, errb bytes.Buffer
+	if code := run([]string{"--listen", "127.0.0.1:0"}, &out, &errb, nil); code != 2 {
+		t.Fatalf("missing dir accepted: %d", code)
+	}
+	envDir := filepath.Join(t.TempDir(), "env")
+	envCore := filepath.Join(t.TempDir(), "env-core")
+	t.Setenv("KMS_DIR", envDir)
+	t.Setenv("KMS_CORE", envCore)
+	errb.Reset()
+	if code := run([]string{"--listen", "127.0.0.1:0"}, &out, &errb, nil); code != 1 || !strings.Contains(errb.String(), envCore) {
+		t.Fatalf("env core not used: %d %s", code, errb.String())
+	}
+	flagCore := filepath.Join(t.TempDir(), "flag-core")
+	errb.Reset()
+	if code := run([]string{"--listen", "127.0.0.1:0", "--core", flagCore}, &out, &errb, nil); code != 1 || !strings.Contains(errb.String(), flagCore) {
+		t.Fatalf("flag did not override env: %d %s", code, errb.String())
+	}
+	cfgCore := filepath.Join(t.TempDir(), "cfg-core")
+	cfg := filepath.Join(t.TempDir(), "c.json")
+	_ = os.WriteFile(cfg, []byte(`{"core":"`+cfgCore+`","listen":"127.0.0.1:0"}`), 0o600)
+	errb.Reset()
+	if code := run([]string{"--config", cfg}, &out, &errb, nil); code != 1 || !strings.Contains(errb.String(), cfgCore) {
+		t.Fatalf("config did not override env: %d %s", code, errb.String())
+	}
+}
+
 func TestServeAndShutdown(t *testing.T) {
 	bin := os.Getenv("KMS_CORE_BIN")
 	if bin == "" {
