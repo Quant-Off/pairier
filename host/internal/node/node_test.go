@@ -487,3 +487,40 @@ func TestTLSMaterialAndPeerLookup(t *testing.T) {
 		t.Fatalf("expected identity, kem, audit and tls-wrap keys, got %d", len(keys))
 	}
 }
+
+func TestInboxPendingLimitPerSender(t *testing.T) {
+	ctx := context.Background()
+	alice, _ := initNode(t, "alice", false)
+	bob, _ := initNode(t, "bob", false)
+	pair(t, alice, bob)
+	k, err := alice.GenerateKey(ctx, "k", wire.UsageDecrypt|wire.UsageExport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func() []byte {
+		env, err := alice.Send(ctx, k.KeyID, "bob", wire.UsageDecrypt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return env
+	}
+	var first string
+	for i := 0; i < MaxPendingPerSender; i++ {
+		rec, err := bob.StoreInbox(ctx, send(), "alice")
+		if err != nil {
+			t.Fatalf("envelope %d: %v", i, err)
+		}
+		if first == "" {
+			first = rec.ID
+		}
+	}
+	if _, err := bob.StoreInbox(ctx, send(), "alice"); !errors.Is(err, ErrInboxFull) {
+		t.Fatalf("limit not enforced: %v", err)
+	}
+	if err := bob.Reject(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.StoreInbox(ctx, send(), "alice"); err != nil {
+		t.Fatalf("slot not freed after reject: %v", err)
+	}
+}

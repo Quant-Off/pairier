@@ -120,6 +120,8 @@ func (s *Server) inbox(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]string{"id": rec.ID})
 	case errors.Is(err, store.ErrExists):
 		fail(w, http.StatusConflict, "duplicate envelope")
+	case errors.Is(err, node.ErrInboxFull):
+		fail(w, http.StatusTooManyRequests, "inbox full for this sender")
 	case errors.Is(err, node.ErrNotRecipient), errors.Is(err, node.ErrSenderMismatch), errors.Is(err, node.ErrUnknownMember),
 		errors.Is(err, exchange.ErrFormat), errors.Is(err, exchange.ErrSignature),
 		errors.Is(err, exchange.ErrBadMemberID), errors.Is(err, exchange.ErrAlgorithm),

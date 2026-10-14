@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Quant-Off/pairier/host/internal/audit"
@@ -32,6 +33,7 @@ var (
 	ErrSignatureAlg    = errors.New("node: envelope signature algorithm differs from the member card")
 	ErrUsageNotAllowed = errors.New("node: usage not allowed for this key kind")
 	ErrSenderMismatch  = errors.New("node: envelope sender differs from the authenticated peer")
+	ErrInboxFull       = errors.New("node: too many pending envelopes from this sender")
 )
 
 const auditTimeout = 10 * time.Second
@@ -47,7 +49,10 @@ type Options struct {
 	Now                 func() time.Time
 }
 
+const MaxPendingPerSender = 64
+
 type Node struct {
+	inboxMu  sync.Mutex
 	opts     Options
 	st       *store.Store
 	core     *core.Client
@@ -581,6 +586,21 @@ func (n *Node) storeInbox(ctx context.Context, raw []byte, from string) (*store.
 	}
 	if ectx.Sender != from {
 		return nil, ErrSenderMismatch
+	}
+	n.inboxMu.Lock()
+	defer n.inboxMu.Unlock()
+	items, err := n.Inbox()
+	if err != nil {
+		return nil, err
+	}
+	pending := 0
+	for _, it := range items {
+		if it.Sender == from {
+			pending++
+		}
+	}
+	if pending >= MaxPendingPerSender {
+		return nil, ErrInboxFull
 	}
 	rec := &store.InboxRecord{ID: store.InboxID(raw), Envelope: raw, ReceivedAt: n.opts.now().Unix()}
 	if err := n.st.PutInbox(rec); err != nil {
