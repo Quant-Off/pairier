@@ -31,7 +31,7 @@ CARGO_NET      := $(CARGO) +$(RUST_TOOLCHAIN)
 CORE_MANIFEST  := --manifest-path $(CORE_DIR)/Cargo.toml
 GO_NET         := GOPROXY=https://proxy.golang.org,direct GOFLAGS=-trimpath $(GO)
 
-.PHONY: all build build-core build-host test test-core test-host lint lint-core lint-host fmt vendor update clean dist audit
+.PHONY: all build build-core build-host test test-core test-host lint lint-core lint-host fmt vendor update clean dist sign verify-dist audit
 
 all: build
 
@@ -81,6 +81,12 @@ dist: build
 		--epoch $(SOURCE_DATE_EPOCH) --out $(DIST_DIR)/sbom.cdx.json
 	./scripts/dist.sh $(VERSION) $(CORE_RELEASE) $(HOST_DIR)/bin/kmsd $(HOST_DIR)/bin/kmsctl $(DIST_DIR) $(DIST_DIR)/sbom.cdx.json
 	rm -f $(DIST_DIR)/sbom.cdx.json
+
+sign:
+	./scripts/sign.sh $(DIST_DIR) $(VERSION)
+
+verify-dist:
+	./scripts/verify.sh $(DIST_DIR) minisign.pub $(VERSION)
 
 audit:
 	cd $(CORE_DIR) && $(CARGO) deny check --disable-fetch advisories licenses bans sources
