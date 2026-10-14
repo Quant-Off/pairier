@@ -17,6 +17,8 @@ export GOTOOLCHAIN := local
 export GOPROXY     := off
 export GOFLAGS     := -mod=vendor -trimpath
 export CGO_ENABLED := 0
+GOFIPS140 ?= certified
+export GOFIPS140
 
 RUST_TOOLCHAIN := $(shell sed -n 's/^channel = "\(.*\)"/\1/p' $(CORE_DIR)/rust-toolchain.toml)
 VERSION        := $(shell sed -n 's/^version = "\(.*\)"/\1/p' $(CORE_DIR)/Cargo.toml | head -1)

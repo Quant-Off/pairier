@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/fips140"
 	"errors"
 	"flag"
 	"fmt"
@@ -50,7 +51,7 @@ func run(args []string, stdout, stderr io.Writer, ready func(addr string)) int {
 		return 2
 	}
 	if *showVersion {
-		fmt.Fprintf(stdout, "kmsd %s\n", version)
+		fmt.Fprintf(stdout, "kmsd %s (go %s, go_fips=%v)\n", version, runtime.Version(), fips140.Enabled())
 		return 0
 	}
 	if fs.NArg() != 0 {
@@ -139,7 +140,7 @@ func serve(ctx context.Context, s settings, stderr io.Writer, ready func(addr st
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stderr, "kmsd %s member %s listening on %s fips=%v pqc=%v\n", version, n.MemberID(), ln.Addr(), n.FIPS(), n.PQC())
+	fmt.Fprintf(stderr, "kmsd %s member %s listening on %s core_fips=%v go_fips=%v pqc=%v\n", version, n.MemberID(), ln.Addr(), n.FIPS(), fips140.Enabled(), n.PQC())
 	if ready != nil {
 		ready(ln.Addr().String())
 	}

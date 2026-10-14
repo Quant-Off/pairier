@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/fips140"
 	"errors"
 	"flag"
 	"fmt"
@@ -96,7 +97,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if rest[0] == "version" {
-		fmt.Fprintf(stdout, "kmsctl %s\n", version)
+		fmt.Fprintf(stdout, "kmsctl %s (go %s, go_fips=%v)\n", version, runtime.Version(), fips140.Enabled())
 		return 0
 	}
 	if *dir == "" {
@@ -222,8 +223,8 @@ func (c *cli) cmdInit(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(c.stdout, "member\t%s\nidentity\t%s\nkem\t%s\nfips\t%v\npqc\t%v\nfingerprint\t%s\n",
-		card.MemberID, algName(card.IdentityAlg), algName(card.KemAlg), n.FIPS(), n.PQC(), fp)
+	fmt.Fprintf(c.stdout, "member\t%s\nidentity\t%s\nkem\t%s\ncore_fips\t%v\ngo_fips\t%v\npqc\t%v\nfingerprint\t%s\n",
+		card.MemberID, algName(card.IdentityAlg), algName(card.KemAlg), n.FIPS(), fips140.Enabled(), n.PQC(), fp)
 	return 0, nil
 }
 
