@@ -64,7 +64,7 @@ These are design choices or open items that are disclosed here rather than treat
 - `kmsd` holds its TLS private key in process memory. Identity, KEM, audit and symmetric keys never leave the core, but the transport key does.
 - The P-256 + ML-KEM-768 hybrid KEM combines the two shared secrets with an HKDF construction specific to pairier. It is not a standardized combiner.
 - A member who receives a key with `export` can send it on to others. Omit `export` to prevent re-sharing.
-- The audit log is a hash chain with a per-entry signature by the core's audit key. Anyone who can start the core as the node user can produce valid entries, and truncation of the log tail cannot be detected without an external reference.
+- The audit log is a hash chain with a per-entry signature by the core's audit key. Anyone who can start the core as the node user can produce valid entries. Truncating the log tail or rolling the log back is detected only by comparing against a head recorded outside the node with `kmsctl audit verify --anchor`.
 - On macOS the core runs without locked memory and the FIPS core is not statically linked. macOS is for development only.
 - `make audit` uses a local RustSec advisory database that must be refreshed on a connected machine.
 - The Rust wire decoder mutation test is seeded, not coverage guided.
@@ -82,10 +82,10 @@ Release tarballs are signed with [minisign](https://jedisct1.github.io/minisign/
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
 $ minisign -Vm SHA256SUMS -P RWTKQNgFrPLkWgNMj67g1XXR7A7IWAfeXYtnGZ1At0+QFEoUUqFZg7pP
-$ sha256sum -c SHA256SUMS
+$ sha256sum --strict -c SHA256SUMS
 ```
 
-Either form works. The first uses the key file, the second the key string itself.
+Either form works. The first uses the key file, the second the key string itself. The repository's `scripts/verify.sh` (`make verify-dist`) also checks, beyond the signature and hashes, that every tarball and SBOM in the directory is listed in `SHA256SUMS` and that a tarball for the given version is present.
 
 Releases are also reproducible. `make dist FIPS=1` on Linux with the pinned toolchains produces a byte-identical tarball, so you can rebuild and compare `SHA256SUMS` instead of, or in addition to, checking the signature.
 

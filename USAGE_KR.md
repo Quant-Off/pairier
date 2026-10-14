@@ -114,7 +114,7 @@ alice$ kmsctl --dir ~/.pairier key gen --label project/db
 af8477cc1076f219bfb047d846629eb8  aes-256-gcm  encrypt,decrypt,export  project/db
 ```
 
-생성되는 키는 AES-256-GCM 대칭 키입니다. `--usage` 플래그를 생략하면 기본값으로 `encrypt,decrypt,export`가 적용됩니다. 다른 구성원에게 보낼 키에는 반드시 `export`가 포함되어 있어야 합니다.
+생성되는 키는 AES-256-GCM 대칭 키입니다. `--usage` 플래그를 생략하면 기본값으로 `encrypt,decrypt,export`가 적용됩니다. 다른 구성원에게 보낼 키에는 반드시 `export`가 포함되어 있어야 합니다. 라벨에는 줄바꿈 같은 제어 문자와 U+202E 같은 양방향 서식 문자를 쓸 수 없습니다.
 
 ### 5-a. 오프라인 전달 (파일)
 
@@ -142,7 +142,7 @@ alice$ kmsctl --dir ~/.pairier key push --id af8477cc... --to bob --url https://
 pushed  af8477cc...  to  bob  envelope  854a37b90d476c1070be8c5449403071
 ```
 
-받은 봉투는 바로 키가 되지 않고 inbox에 보관됩니다. 수신자가 확인 후 수락하거나 거절할 수 있습니다.
+받은 봉투는 바로 키가 되지 않고 inbox에 보관됩니다. 수신자가 확인 후 수락하거나 거절할 수 있습니다. 송신자 한 명당 대기 중인 봉투는 64개까지 보관하며, 수락하거나 거절해 자리가 비어야 다음 봉투를 받습니다.
 
 ```bash
 bob$ kmsctl --dir ~/.pairier inbox list
@@ -168,7 +168,11 @@ db password
 ```bash
 bob$ kmsctl --dir ~/.pairier audit verify
 verified  13  entries
+head      13:9c1d...e4a0
+bob$ kmsctl --dir ~/.pairier audit verify --anchor 13:9c1d...e4a0
 ```
+
+`head`는 마지막 항목의 순번과 해시입니다. 키 전달이나 구성원 등록처럼 중요한 작업을 마친 뒤에는 이 값을 노드 밖(다른 기기, 출력물 등)에 기록해 두세요. 나중에 `--anchor`로 넘기면 로그가 그 항목을 그대로 담고 있는지 확인합니다. 로그 끝부분이 잘렸거나, 이전 로그로 되돌린 뒤 이어 쓴 경우에는 실패합니다.
 
 ## kmsctl 명령 참조
 
@@ -185,24 +189,24 @@ verified  13  entries
 
 ### 명령
 
-| 명령                                                            | 설명                                              |
-|---------------------------------------------------------------|-------------------------------------------------|
-| `init --id MEMBER [--pqc]`                                    | 빈 디렉토리에 노드를 만듭니다.                               |
-| `card [--out FILE]`                                           | 자기 서명된 신원 카드를 출력합니다. 지문은 stderr에 표시됩니다.         |
-| `member add --card FILE --fingerprint FP`                     | 지문을 확인한 뒤 구성원을 등록합니다.                           |
-| `member list`                                                 | 등록된 구성원과 알고리즘, 지문을 표시합니다.                       |
-| `key gen --label LABEL [--usage LIST]`                        | 대칭 키를 생성합니다.                                    |
-| `key list`                                                    | 키 목록을 표시합니다. 마지막 열은 `local` 또는 `from <송신자>`입니다. |
-| `key info --id KEYID`                                         | 키 상세와 출처를 표시합니다.                                |
-| `key send --id KEYID --to MEMBER [--usage LIST] [--out FILE]` | 봉투 파일을 만듭니다.                                    |
-| `key receive [--in FILE]`                                     | 봉투를 검증하고 키를 가져옵니다.                              |
-| `key push --id KEYID --to MEMBER --url URL [--usage LIST]`    | 수신자의 kmsd로 봉투를 보냅니다.                            |
-| `inbox list`, `inbox accept --id ID`, `inbox reject --id ID`  | kmsd가 받은 봉투를 처리합니다.                             |
-| `peer health --member MEMBER --url URL`                       | 상대 kmsd와 상호 인증이 되는지 확인합니다.                      |
-| `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | 암호화합니다. 입력이 없으면 stdin을 씁니다.                     |
-| `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | 복호화합니다.                                         |
-| `audit verify`                                                | 감사 로그 체인과 모든 체크포인트 서명을 검증합니다.                   |
-| `version`                                                     | 버전과 Go FIPS 상태를 출력합니다.                          |
+| 명령                                                            | 설명                                                                               |
+|---------------------------------------------------------------|----------------------------------------------------------------------------------|
+| `init --id MEMBER [--pqc]`                                    | 빈 디렉토리에 노드를 만듭니다.                                                                |
+| `card [--out FILE]`                                           | 자기 서명된 신원 카드를 출력합니다. 지문은 stderr에 표시됩니다.                                          |
+| `member add --card FILE --fingerprint FP`                     | 지문을 확인한 뒤 구성원을 등록합니다.                                                            |
+| `member list`                                                 | 등록된 구성원과 알고리즘, 지문을 표시합니다.                                                        |
+| `key gen --label LABEL [--usage LIST]`                        | 대칭 키를 생성합니다.                                                                     |
+| `key list`                                                    | 키 목록을 표시합니다. 마지막 열은 `local` 또는 `from <송신자>`입니다.                                  |
+| `key info --id KEYID`                                         | 키 상세와 출처를 표시합니다.                                                                 |
+| `key send --id KEYID --to MEMBER [--usage LIST] [--out FILE]` | 봉투 파일을 만듭니다.                                                                     |
+| `key receive [--in FILE]`                                     | 봉투를 검증하고 키를 가져옵니다.                                                               |
+| `key push --id KEYID --to MEMBER --url URL [--usage LIST]`    | 수신자의 kmsd로 봉투를 보냅니다.                                                             |
+| `inbox list`, `inbox accept --id ID`, `inbox reject --id ID`  | kmsd가 받은 봉투를 처리합니다.                                                              |
+| `peer health --member MEMBER --url URL`                       | 상대 kmsd와 상호 인증이 되는지 확인합니다.                                                       |
+| `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | 암호화합니다. 입력이 없으면 stdin을 씁니다.                                                      |
+| `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | 복호화합니다.                                                                          |
+| `audit verify [--anchor SEQ:HASH]`                            | 감사 로그 체인과 모든 체크포인트 서명을 검증하고 head를 출력합니다. `--anchor`를 주면 그 항목이 로그에 그대로 있는지 확인합니다. |
+| `version`                                                     | 버전과 Go FIPS 상태를 출력합니다.                                                           |
 
 `--out`으로 지정한 파일이 이미 있으면 덮어쓰지 않고 실패하며, 새 파일은 `0600` 권한으로 만들어집니다. 종료 코드는 다음과 같습니다.
 
@@ -264,7 +268,7 @@ verified  13  entries
 | `GET /v1/card`   | 이 노드의 신원 카드                           |
 | `POST /v1/inbox` | 봉투 제출 (본문은 봉투 바이트). 성공 시 `201`과 봉투 id |
 
-봉투의 송신자가 인증된 피어와 다르거나, 수신자가 이 노드가 아니거나, 서명이 일치하지 않으면 `400`으로 거부됩니다. 같은 봉투를 다시 보내면 `409`로 응답합니다.
+봉투의 송신자가 인증된 피어와 다르거나, 수신자가 이 노드가 아니거나, 서명이 일치하지 않으면 `400`으로 거부됩니다. 같은 봉투를 다시 보내면 `409`로, 같은 송신자의 대기 봉투가 64개에 이르면 `429`로 응답합니다. kmsd는 동시에 64개 연결까지 처리하고, 그 이상은 앞선 연결이 끝날 때까지 대기시킵니다.
 
 ### systemd 예시
 
@@ -294,12 +298,18 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | 옵션                        | 설명                                                            |
 |---------------------------|---------------------------------------------------------------|
 | `--fd N`                  | 상속받은 소켓 사용 (호스트가 기동할 때 `3`)                                   |
-| `--socket PATH`           | 소켓 경로에서 연결 하나만 받은 뒤 경로를 삭제                                    |
+| `--socket PATH`           | 소켓 경로에서 uid가 맞는 연결 하나만 받은 뒤 경로를 삭제. 다른 uid의 연결은 기록 후 끊고 계속 대기 |
 | `--root-key-file PATH`    | 32바이트 일반 파일만 허용. 현재 사용자 소유, 그룹과 기타 권한 없음, 심볼릭 링크와 추가 하드 링크 없음 |
 | `--ephemeral-root`        | 메모리에만 있는 임시 루트 키 (재시작하면 blob을 열 수 없음)                         |
 | `--pqc`                   | PQC 알고리즘 활성화 (pqc feature로 빌드한 경우)                            |
 | `--allow-unlocked-memory` | `mlockall`을 쓸 수 없는 환경에서 계속 진행                                 |
-| `--peer-uid UID`          | 연결한 피어의 uid 검증 (기본은 자신의 uid)                                  |
+| `--peer-uid UID`          | 받을 피어의 uid (기본은 자신의 uid). 자신과 다르면 소켓을 `0666`으로 열어 둠           |
+
+소켓을 만드는 디렉토리는 코어 사용자나 root 소유여야 합니다. 그룹이나 기타 사용자가 쓸 수 있는 디렉토리는 sticky 비트가 없으면 기동을 거부합니다. `--peer-uid`가 코어 자신과 다르면 소켓 파일이 `0666`이 되므로, 디렉토리 권한으로 접근을 좁혀야 합니다. 예를 들어 코어가 uid 1001, 호스트가 uid 1002라면 호스트 그룹만 디렉토리를 지날 수 있게 만듭니다.
+
+```bash
+# install -d -o 1001 -g 1002 -m 0710 /run/pairier
+```
 
 > [!NOTE]
 > 현재 `kmsctl`과 `kmsd`는 노드 디렉토리의 루트 키로 코어를 직접 기동하는 방식만 지원합니다.
@@ -324,7 +334,7 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 ## 보안 운영 주의 사항
 
 - **지문은 별도 채널로 확인하세요.** 카드와 지문을 같은 경로로 받으면 중간자 공격을 막을 수 없습니다.
-- **감사 로그의 한계를 이해해야 합니다.** 각 항목은 코어의 감사 키로 서명되므로, 코어를 쓸 수 없는 공격자(디스크 탈취, 변조된 백업 등)는 로그를 위조하거나 재계산할 수 없습니다. 반면 노드 사용자 권한으로 코어를 기동할 수 있으면 유효한 서명을 만들 수 있습니다. 또 로그 끝부분을 잘라 내는 것은 외부 기준점이 없으면 탐지할 수 없습니다.
+- **감사 로그의 한계를 이해해야 합니다.** 각 항목은 코어의 감사 키로 서명되므로, 코어를 쓸 수 없는 공격자(디스크 탈취, 변조된 백업 등)는 로그를 위조하거나 재계산할 수 없습니다. 반면 노드 사용자 권한으로 코어를 기동할 수 있으면 유효한 서명을 만들 수 있습니다. 또 로그 끝부분을 잘라 내거나 이전 로그로 되돌리는 것은, 노드 밖에 기록해 둔 head와 `audit verify --anchor`로 대조해야 탐지할 수 있습니다.
 - **kmsd는 TLS 개인키를 메모리에 둡니다.** 키 교환 대상인 대칭 키와 신원, KEM, 감사 키는 코어 밖으로 나오지 않지만, 전송용 TLS 키는 예외입니다.
 - **macOS는 개발용으로 사용하세요.** `mlockall`이 없어 메모리 잠금 없이 실행되고, FIPS 코어도 정적 링크되지 않습니다. 운영은 Linux에서 하십시오.
 - **PQC 모드 감사 로깅은 빠른 속도로 증가합니다.** ML-DSA 서명으로 인해 항목 하나가 약 7KB입니다. 암/복호화도 한 번마다 항목이 추가됩니다.
@@ -339,10 +349,12 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | 항목                  | 한도                                              |
 |---------------------|-------------------------------------------------|
 | 구성원 id              | 영문 소문자, 숫자로 시작하고 소문자, 숫자, `.`, `_`, `-`로 최대 64자 |
-| 키 label             | 256바이트                                          |
+| 키 label             | 256바이트, 제어 문자와 양방향 서식 문자 불가                     |
 | 암호화 평문, AAD         | 각각 64KiB                                        |
 | kmsctl 입력 파일과 stdin | 1MiB                                            |
 | 봉투 컨텍스트             | 1KiB                                            |
+| 송신자별 대기 봉투          | 64개                                             |
+| kmsd 동시 연결          | 64개                                             |
 
 ## 문제 해결
 
@@ -357,3 +369,7 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | `store: object already exists`                                                   | 이미 가져온 키이거나 이미 받은 봉투입니다.                                                     |
 | `node: stored metadata does not match the core`                                  | 노드 디렉토리의 레코드가 변조되었습니다. 백업과 감사 로그를 확인해야 합니다.                                  |
 | `audit: checkpoint signature is invalid`                                         | 감사 로그가 코어 없이 수정되었습니다.                                                        |
+| `audit: log does not contain the anchored entry`                                 | 기록해 둔 head 이후 로그가 잘렸거나 이전 로그로 되돌려졌습니다. 백업과 노드 접근 기록을 확인해야 합니다.               |
+| `node: label contains control or bidirectional formatting characters`            | 라벨에서 제어 문자와 양방향 서식 문자를 빼야 합니다.                                               |
+| `api: push rejected: 429 inbox full for this sender`                             | 수신자 inbox에 내가 보낸 대기 봉투가 64개 쌓였습니다. 수신자가 수락하거나 거절해야 합니다.                      |
+| `transport: socket directory ... is writable by other users`                     | 소켓 디렉토리에서 그룹과 기타 사용자의 쓰기 권한을 빼야 합니다.                                         |

@@ -114,7 +114,7 @@ alice$ kmsctl --dir ~/.pairier key gen --label project/db
 af8477cc1076f219bfb047d846629eb8  aes-256-gcm  encrypt,decrypt,export  project/db
 ```
 
-The generated key is an AES-256-GCM symmetric key. If the `--usage` flag is omitted, the default `encrypt,decrypt,export` applies. A key that will be sent to another member must include `export`.
+The generated key is an AES-256-GCM symmetric key. If the `--usage` flag is omitted, the default `encrypt,decrypt,export` applies. A key that will be sent to another member must include `export`. Labels cannot contain control characters such as a newline, or bidirectional formatting characters such as U+202E.
 
 ### 5-a. Offline delivery (file)
 
@@ -142,7 +142,7 @@ alice$ kmsctl --dir ~/.pairier key push --id af8477cc... --to bob --url https://
 pushed  af8477cc...  to  bob  envelope  854a37b90d476c1070be8c5449403071
 ```
 
-A received envelope does not become a key right away. It is held in the inbox, and the recipient reviews it and then accepts or rejects it.
+A received envelope does not become a key right away. It is held in the inbox, and the recipient reviews it and then accepts or rejects it. Up to 64 pending envelopes are kept per sender, and the next one is accepted only after the recipient accepts or rejects one.
 
 ```bash
 bob$ kmsctl --dir ~/.pairier inbox list
@@ -168,7 +168,11 @@ The ciphertext is binary and exactly 48 bytes longer than the plaintext (salt 32
 ```bash
 bob$ kmsctl --dir ~/.pairier audit verify
 verified  13  entries
+head      13:9c1d...e4a0
+bob$ kmsctl --dir ~/.pairier audit verify --anchor 13:9c1d...e4a0
 ```
+
+`head` is the sequence number and hash of the last entry. After important operations such as sending keys or registering members, record this value outside the node (another device, a printout, and so on). Passing it later with `--anchor` checks that the log still contains that exact entry. The check fails if the end of the log was truncated, or if an older log was restored and then appended to.
 
 ## kmsctl command reference
 
@@ -185,24 +189,24 @@ Global options may appear before or after the command. `kmsctl --dir X key list`
 
 ### Commands
 
-| Command                                                       | Description                                                               |
-|---------------------------------------------------------------|---------------------------------------------------------------------------|
-| `init --id MEMBER [--pqc]`                                    | Creates a node in an empty directory.                                     |
-| `card [--out FILE]`                                           | Prints the self-signed identity card. The fingerprint is shown on stderr. |
-| `member add --card FILE --fingerprint FP`                     | Registers a member after checking the fingerprint.                        |
-| `member list`                                                 | Shows registered members with their algorithms and fingerprints.          |
-| `key gen --label LABEL [--usage LIST]`                        | Generates a symmetric key.                                                |
-| `key list`                                                    | Lists keys. The last column is `local` or `from <sender>`.                |
-| `key info --id KEYID`                                         | Shows key details and origin.                                             |
-| `key send --id KEYID --to MEMBER [--usage LIST] [--out FILE]` | Creates an envelope file.                                                 |
-| `key receive [--in FILE]`                                     | Verifies an envelope and imports the key.                                 |
-| `key push --id KEYID --to MEMBER --url URL [--usage LIST]`    | Sends an envelope to the recipient's kmsd.                                |
-| `inbox list`, `inbox accept --id ID`, `inbox reject --id ID`  | Handles envelopes received by kmsd.                                       |
-| `peer health --member MEMBER --url URL`                       | Checks that mutual authentication with the peer's kmsd works.             |
-| `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | Encrypts. Reads stdin when no input is given.                             |
-| `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | Decrypts.                                                                 |
-| `audit verify`                                                | Verifies the audit log chain and every checkpoint signature.              |
-| `version`                                                     | Prints the version and the Go FIPS status.                                |
+| Command                                                       | Description                                                                                                                                                 |
+|---------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `init --id MEMBER [--pqc]`                                    | Creates a node in an empty directory.                                                                                                                       |
+| `card [--out FILE]`                                           | Prints the self-signed identity card. The fingerprint is shown on stderr.                                                                                   |
+| `member add --card FILE --fingerprint FP`                     | Registers a member after checking the fingerprint.                                                                                                          |
+| `member list`                                                 | Shows registered members with their algorithms and fingerprints.                                                                                            |
+| `key gen --label LABEL [--usage LIST]`                        | Generates a symmetric key.                                                                                                                                  |
+| `key list`                                                    | Lists keys. The last column is `local` or `from <sender>`.                                                                                                  |
+| `key info --id KEYID`                                         | Shows key details and origin.                                                                                                                               |
+| `key send --id KEYID --to MEMBER [--usage LIST] [--out FILE]` | Creates an envelope file.                                                                                                                                   |
+| `key receive [--in FILE]`                                     | Verifies an envelope and imports the key.                                                                                                                   |
+| `key push --id KEYID --to MEMBER --url URL [--usage LIST]`    | Sends an envelope to the recipient's kmsd.                                                                                                                  |
+| `inbox list`, `inbox accept --id ID`, `inbox reject --id ID`  | Handles envelopes received by kmsd.                                                                                                                         |
+| `peer health --member MEMBER --url URL`                       | Checks that mutual authentication with the peer's kmsd works.                                                                                               |
+| `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | Encrypts. Reads stdin when no input is given.                                                                                                               |
+| `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | Decrypts.                                                                                                                                                   |
+| `audit verify [--anchor SEQ:HASH]`                            | Verifies the audit log chain and every checkpoint signature, and prints the head. With `--anchor`, also checks that the anchored entry is still in the log. |
+| `version`                                                     | Prints the version and the Go FIPS status.                                                                                                                  |
 
 If the file given with `--out` already exists, the command fails instead of overwriting it, and new files are created with `0600` permissions. Exit codes are as follows.
 
@@ -264,7 +268,7 @@ Every endpoint requires a client certificate of a registered member.
 | `GET /v1/card`   | This node's identity card                                                                          |
 | `POST /v1/inbox` | Submits an envelope (the body is the envelope bytes). Returns `201` and the envelope id on success |
 
-An envelope is rejected with `400` if its sender differs from the authenticated peer, its recipient is not this node, or its signature does not verify. Submitting the same envelope again returns `409`.
+An envelope is rejected with `400` if its sender differs from the authenticated peer, its recipient is not this node, or its signature does not verify. Submitting the same envelope again returns `409`, and once the same sender has 64 pending envelopes the response is `429`. kmsd serves up to 64 connections at a time, and further connections wait until an earlier one ends.
 
 ### systemd example
 
@@ -291,15 +295,21 @@ $ kms-core --generate-root-key /path/root.key
 $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc --peer-uid 1001
 ```
 
-| Option                    | Description                                                                                                                                  |
-|---------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `--fd N`                  | Use an inherited socket (`3` when the host launches the core)                                                                                |
-| `--socket PATH`           | Accept a single connection on the socket path, then remove the path                                                                          |
-| `--root-key-file PATH`    | Accepts only a 32-byte regular file owned by the current user, with no group or other permissions, no symbolic links and no extra hard links |
-| `--ephemeral-root`        | Temporary root key held only in memory (blobs cannot be opened after a restart)                                                              |
-| `--pqc`                   | Enable PQC algorithms (when built with the pqc feature)                                                                                      |
-| `--allow-unlocked-memory` | Continue where `mlockall` is unavailable                                                                                                     |
-| `--peer-uid UID`          | Verify the uid of the connecting peer (defaults to the core's own uid)                                                                       |
+| Option                    | Description                                                                                                                                                               |
+|---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--fd N`                  | Use an inherited socket (`3` when the host launches the core)                                                                                                             |
+| `--socket PATH`           | Accept a single connection with the expected uid on the socket path, then remove the path. Connections from other uids are logged and closed while the core keeps waiting |
+| `--root-key-file PATH`    | Accepts only a 32-byte regular file owned by the current user, with no group or other permissions, no symbolic links and no extra hard links                              |
+| `--ephemeral-root`        | Temporary root key held only in memory (blobs cannot be opened after a restart)                                                                                           |
+| `--pqc`                   | Enable PQC algorithms (when built with the pqc feature)                                                                                                                   |
+| `--allow-unlocked-memory` | Continue where `mlockall` is unavailable                                                                                                                                  |
+| `--peer-uid UID`          | uid of the peer to accept (defaults to the core's own uid). If it differs, the socket is left at mode `0666`                                                              |
+
+The directory that holds the socket must be owned by the core user or root. A directory writable by group or others is refused unless it has the sticky bit. When `--peer-uid` differs from the core's own uid, the socket file is mode `0666`, so restrict access with the directory permissions. For example, with the core as uid 1001 and the host as uid 1002, let only the host group traverse the directory.
+
+```bash
+# install -d -o 1001 -g 1002 -m 0710 /run/pairier
+```
 
 > [!NOTE]
 > Currently `kmsctl` and `kmsd` support only launching the core directly with the root key in the node directory.
@@ -324,7 +334,7 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 ## Security operations notes
 
 - **Verify fingerprints over a separate channel.** If the card and the fingerprint arrive by the same route, a man-in-the-middle attack cannot be prevented.
-- **Understand the limits of the audit log.** Each entry is signed with the core's audit key, so an attacker who cannot use the core (a stolen disk, a tampered backup, and so on) cannot forge or recompute the log. However, anyone who can start the core with the node user's permissions can produce valid signatures. Truncating the end of the log also cannot be detected without an external reference point.
+- **Understand the limits of the audit log.** Each entry is signed with the core's audit key, so an attacker who cannot use the core (a stolen disk, a tampered backup, and so on) cannot forge or recompute the log. However, anyone who can start the core with the node user's permissions can produce valid signatures. Truncating the end of the log, or rolling it back to an older copy, is detected only by comparing against a head recorded outside the node with `audit verify --anchor`.
 - **kmsd keeps its TLS private key in memory.** The symmetric keys being exchanged and the identity, KEM and audit keys never leave the core, but the transport TLS key is an exception.
 - **Use macOS for development only.** Without `mlockall`, the core runs without memory locking, and the FIPS core is not statically linked. Run production deployments on Linux.
 - **The audit log grows quickly in PQC mode.** ML-DSA signatures make each entry about 7KB, and every encryption and decryption also adds an entry.
@@ -339,21 +349,27 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | Item                         | Limit                                                                                                                          |
 |------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
 | Member id                    | Up to 64 characters, starting with a lowercase letter or digit and containing only lowercase letters, digits, `.`, `_` and `-` |
-| Key label                    | 256 bytes                                                                                                                      |
+| Key label                    | 256 bytes, no control or bidirectional formatting characters                                                                   |
 | Encryption plaintext, AAD    | 64KiB each                                                                                                                     |
 | kmsctl input files and stdin | 1MiB                                                                                                                           |
 | Envelope context             | 1KiB                                                                                                                           |
+| Pending envelopes per sender | 64                                                                                                                             |
+| kmsd concurrent connections  | 64                                                                                                                             |
 
 ## Troubleshooting
 
-| Message                                                                          | Cause and fix                                                                                      |
-|----------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------|
-| `mlockall: Cannot allocate memory ... (pass --allow-unlocked-memory to proceed)` | The memlock limit is too small. Raise it with `ulimit -l unlimited` or `LimitMEMLOCK=infinity`.    |
-| `node: fingerprint does not match the card`                                      | The fingerprint differs. Get the card again and re-verify the fingerprint over a separate channel. |
-| `core: op 0x0023 failed: capability disabled`                                    | A pqc card was registered on a node initialized without pqc.                                       |
-| `core: op 0x0030 failed: usage denied`                                           | The key lacks `export`, or the requested usage is broader than the original.                       |
-| `node: envelope is addressed to another member`                                  | The envelope was sent to a different member.                                                       |
-| `node: unknown member`                                                           | The sender or the recipient is not registered.                                                     |
-| `store: object already exists`                                                   | The key was already imported or the envelope was already received.                                 |
-| `node: stored metadata does not match the core`                                  | Records in the node directory have been tampered with. Check backups and the audit log.            |
-| `audit: checkpoint signature is invalid`                                         | The audit log was modified without the core.                                                       |
+| Message                                                                          | Cause and fix                                                                                        |
+|----------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
+| `mlockall: Cannot allocate memory ... (pass --allow-unlocked-memory to proceed)` | The memlock limit is too small. Raise it with `ulimit -l unlimited` or `LimitMEMLOCK=infinity`.      |
+| `node: fingerprint does not match the card`                                      | The fingerprint differs. Get the card again and re-verify the fingerprint over a separate channel.   |
+| `core: op 0x0023 failed: capability disabled`                                    | A pqc card was registered on a node initialized without pqc.                                         |
+| `core: op 0x0030 failed: usage denied`                                           | The key lacks `export`, or the requested usage is broader than the original.                         |
+| `node: envelope is addressed to another member`                                  | The envelope was sent to a different member.                                                         |
+| `node: unknown member`                                                           | The sender or the recipient is not registered.                                                       |
+| `store: object already exists`                                                   | The key was already imported or the envelope was already received.                                   |
+| `node: stored metadata does not match the core`                                  | Records in the node directory have been tampered with. Check backups and the audit log.              |
+| `audit: checkpoint signature is invalid`                                         | The audit log was modified without the core.                                                         |
+| `audit: log does not contain the anchored entry`                                 | The log was truncated or rolled back after the recorded head. Check backups and access to the node.  |
+| `node: label contains control or bidirectional formatting characters`            | Remove control and bidirectional formatting characters from the label.                               |
+| `api: push rejected: 429 inbox full for this sender`                             | The recipient's inbox holds 64 pending envelopes from you. The recipient must accept or reject some. |
+| `transport: socket directory ... is writable by other users`                     | Remove group and other write permission from the socket directory.                                   |

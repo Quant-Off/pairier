@@ -64,7 +64,7 @@ pairier는 "Abandon trust. Choose isolation." 원칙으로 설계되었습니다
 - `kmsd`는 TLS 개인키를 프로세스 메모리에 둡니다. 신원, KEM, 감사, 대칭 키는 코어 밖으로 나오지 않지만 전송용 키는 예외입니다.
 - P-256 + ML-KEM-768 하이브리드 KEM은 두 공유 비밀을 pairier 고유의 HKDF 구성으로 결합합니다. 표준화된 결합 방식이 아닙니다.
 - `export` 권한과 함께 키를 받은 구성원은 그 키를 다른 구성원에게 다시 보낼 수 있습니다. 재공유를 막으려면 `export`를 주지 마세요.
-- 감사 로그는 항목마다 코어의 감사 키로 서명한 해시 체인입니다. 노드 사용자 권한으로 코어를 기동할 수 있으면 유효한 항목을 만들 수 있고, 로그 끝부분이 잘리는 것은 외부 기준점 없이는 탐지할 수 없습니다.
+- 감사 로그는 항목마다 코어의 감사 키로 서명한 해시 체인입니다. 노드 사용자 권한으로 코어를 기동할 수 있으면 유효한 항목을 만들 수 있습니다. 로그 끝부분을 잘라 내거나 이전 로그로 되돌리는 것은, 노드 밖에 기록해 둔 head와 `kmsctl audit verify --anchor`로 대조할 때만 탐지됩니다.
 - macOS에서는 코어가 메모리 잠금 없이 실행되고 FIPS 코어도 정적 링크되지 않습니다. macOS는 개발용입니다.
 - `make audit`는 로컬 RustSec 권고 데이터베이스를 사용하며, 네트워크가 연결된 장비에서 갱신해야 합니다.
 - Rust 와이어 디코더 변이 테스트는 시드 기반이며 커버리지 유도 방식이 아닙니다.
@@ -82,10 +82,10 @@ pairier는 "Abandon trust. Choose isolation." 원칙으로 설계되었습니다
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
 $ minisign -Vm SHA256SUMS -P RWTKQNgFrPLkWgNMj67g1XXR7A7IWAfeXYtnGZ1At0+QFEoUUqFZg7pP
-$ sha256sum -c SHA256SUMS
+$ sha256sum --strict -c SHA256SUMS
 ```
 
-두 방식 모두 동일하게 동작합니다. 첫 번째는 키 파일을, 두 번째는 키 문자열 자체를 사용합니다.
+두 방식 모두 동일하게 동작합니다. 첫 번째는 키 파일을, 두 번째는 키 문자열 자체를 사용합니다. 저장소의 `scripts/verify.sh`(`make verify-dist`)는 서명과 해시 외에도, 디렉토리의 tarball과 SBOM이 모두 `SHA256SUMS`에 들어 있는지와 지정한 버전의 tarball이 있는지까지 확인합니다.
 
 릴리즈는 재현 가능합니다. 고정된 툴체인으로 Linux에서 `make dist FIPS=1`을 실행하면 바이트 단위로 동일한 tarball이 생성되므로, 서명 확인 대신 또는 서명 확인과 함께 직접 빌드해 `SHA256SUMS`를 비교할 수 있습니다.
 
