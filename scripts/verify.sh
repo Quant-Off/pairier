@@ -36,8 +36,37 @@ if [ -n "$version" ]; then
 fi
 
 cd "$dist_dir"
+if [ ! -s SHA256SUMS ]; then
+  echo "verify: SHA256SUMS is empty" >&2
+  exit 1
+fi
+if grep -Evq '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' SHA256SUMS; then
+  echo "verify: SHA256SUMS contains a malformed line" >&2
+  exit 1
+fi
+listed=$(sed 's/^[0-9a-f]*  //' SHA256SUMS)
+for f in ./*.tar.gz ./*.cdx.json; do
+  [ -e "$f" ] || continue
+  name=${f#./}
+  if ! printf '%s\n' "$listed" | grep -Fxq -- "$name"; then
+    echo "verify: $name is not covered by SHA256SUMS" >&2
+    exit 1
+  fi
+done
+if [ -n "$version" ]; then
+  found=0
+  for name in $listed; do
+    case "$name" in
+      "pairier-$version-"*.tar.gz) found=1 ;;
+    esac
+  done
+  if [ "$found" -ne 1 ]; then
+    echo "verify: SHA256SUMS lists no pairier-$version tarball" >&2
+    exit 1
+  fi
+fi
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum -c SHA256SUMS
+  sha256sum --strict -c SHA256SUMS
 else
-  shasum -a 256 -c SHA256SUMS
+  shasum -a 256 --strict -c SHA256SUMS
 fi
