@@ -153,7 +153,7 @@ func TestExchangeBetweenNodes(t *testing.T) {
 	}
 	defer reopened.Close()
 	keys, err := reopened.Keys()
-	if err != nil || len(keys) != 4 {
+	if err != nil || len(keys) != 5 {
 		t.Fatalf("keys after reopen %d %v", len(keys), err)
 	}
 	if _, err := reopened.Key(ctx, k.KeyID); err != nil {
@@ -190,8 +190,52 @@ func TestExchangeBetweenNodes(t *testing.T) {
 	if !failed {
 		t.Fatal("failed send to unknown member not audited")
 	}
-	if n, err := audit.Verify(bob.AuditLogPath()); err != nil || n == 0 {
+	if n, err := bob.VerifyAudit(); err != nil || n == 0 {
 		t.Fatalf("bob audit %d %v", n, err)
+	}
+	if _, err := audit.Verify(bob.AuditLogPath(), checkpoints{n: reopened}); !errors.Is(err, audit.ErrSignature) {
+		t.Fatalf("alice's audit key verified bob's log: %v", err)
+	}
+}
+
+func TestAuditLogCannotBeRewrittenWithoutTheCore(t *testing.T) {
+	ctx := context.Background()
+	alice, o := initNode(t, "alice", false)
+	if _, err := alice.GenerateKey(ctx, "k", wire.UsageEncrypt); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := alice.VerifyAudit(); err != nil || n != 2 {
+		t.Fatalf("verify %d %v", n, err)
+	}
+	if err := alice.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(o.Dir, "audit.log")
+	entries, err := audit.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := filepath.Join(t.TempDir(), "forged.log")
+	fl, err := audit.Open(forged, audit.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		f := e.Fields
+		if e.Event == "key.generate" {
+			f = map[string]string{"key": "0000", "label": "k", "usage": "1"}
+		}
+		if err := fl.Append(e.Event, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = fl.Close()
+	raw, _ := os.ReadFile(forged)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, o); !errors.Is(err, audit.ErrSignature) {
+		t.Fatalf("node opened with a rewritten audit log: %v", err)
 	}
 }
 
@@ -334,7 +378,7 @@ func TestTLSMaterialAndPeerLookup(t *testing.T) {
 		t.Fatal("certificate subject")
 	}
 	keys, _ := reopened.Keys()
-	if len(keys) != 3 {
-		t.Fatalf("expected identity, kem and tls-wrap keys, got %d", len(keys))
+	if len(keys) != 4 {
+		t.Fatalf("expected identity, kem, audit and tls-wrap keys, got %d", len(keys))
 	}
 }

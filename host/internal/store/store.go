@@ -74,8 +74,14 @@ type Node struct {
 	MemberID      string `json:"member_id"`
 	IdentityKeyID string `json:"identity_key_id"`
 	KemKeyID      string `json:"kem_key_id"`
+	AuditKeyID    string `json:"audit_key_id"`
 	PQC           bool   `json:"pqc"`
 	CreatedAt     int64  `json:"created_at"`
+}
+
+func (n *Node) valid() bool {
+	return ValidMemberID(n.MemberID) && ValidKeyID(n.IdentityKeyID) && ValidKeyID(n.KemKeyID) && ValidKeyID(n.AuditKeyID) &&
+		n.IdentityKeyID != n.KemKeyID && n.IdentityKeyID != n.AuditKeyID && n.KemKeyID != n.AuditKeyID
 }
 
 type TLSRecord struct {
@@ -248,7 +254,7 @@ func (s *Store) ListMembers() ([]*MemberRecord, error) {
 }
 
 func (s *Store) PutNode(n *Node) error {
-	if !ValidMemberID(n.MemberID) || !ValidKeyID(n.IdentityKeyID) || !ValidKeyID(n.KemKeyID) {
+	if !n.valid() {
 		return ErrBadID
 	}
 	return s.writeNew(nodeFile, n)
@@ -262,7 +268,7 @@ func (s *Store) GetNode() (*Node, error) {
 		}
 		return nil, err
 	}
-	if !ValidMemberID(n.MemberID) || !ValidKeyID(n.IdentityKeyID) || !ValidKeyID(n.KemKeyID) {
+	if !n.valid() {
 		return nil, ErrCorrupt
 	}
 	return &n, nil

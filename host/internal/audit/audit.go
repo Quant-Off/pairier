@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,10 +27,55 @@ const (
 )
 
 var (
-	ErrCorrupt  = errors.New("audit: log chain is corrupt")
-	ErrInsecure = errors.New("audit: insecure log file")
-	ErrField    = errors.New("audit: invalid event or field")
+	ErrCorrupt   = errors.New("audit: log chain is corrupt")
+	ErrInsecure  = errors.New("audit: insecure log file")
+	ErrField     = errors.New("audit: invalid event or field")
+	ErrSignature = errors.New("audit: checkpoint signature is invalid")
 )
+
+const checkpointDomain = "pairier/audit/checkpoint/v1"
+
+type Signer interface {
+	SignCheckpoint(msg []byte) ([]byte, error)
+}
+
+type Verifier interface {
+	VerifyCheckpoint(msg, sig []byte) (bool, error)
+}
+
+func CheckpointMessage(seq uint64, hash string) ([]byte, error) {
+	h, err := hex.DecodeString(hash)
+	if err != nil || len(h) != hashLen {
+		return nil, ErrCorrupt
+	}
+	msg := make([]byte, 0, len(checkpointDomain)+1+8+hashLen)
+	msg = append(msg, checkpointDomain...)
+	msg = append(msg, 0)
+	msg = binary.BigEndian.AppendUint64(msg, seq)
+	return append(msg, h...), nil
+}
+
+func verifyEntry(v Verifier, e *Entry) error {
+	if e.Sig == "" {
+		return fmt.Errorf("%w: entry %d is unsigned", ErrSignature, e.Seq)
+	}
+	sig, err := hex.DecodeString(e.Sig)
+	if err != nil {
+		return fmt.Errorf("%w: entry %d", ErrSignature, e.Seq)
+	}
+	msg, err := CheckpointMessage(e.Seq, e.Hash)
+	if err != nil {
+		return err
+	}
+	ok, err := v.VerifyCheckpoint(msg, sig)
+	if err != nil {
+		return fmt.Errorf("%w: entry %d: %v", ErrSignature, e.Seq, err)
+	}
+	if !ok {
+		return fmt.Errorf("%w: entry %d", ErrSignature, e.Seq)
+	}
+	return nil
+}
 
 type Entry struct {
 	Seq    uint64            `json:"seq"`
@@ -38,20 +84,34 @@ type Entry struct {
 	Fields map[string]string `json:"fields,omitempty"`
 	Prev   string            `json:"prev"`
 	Hash   string            `json:"hash"`
+	Sig    string            `json:"sig,omitempty"`
 }
 
 type Log struct {
-	mu     sync.Mutex
-	f      *os.File
-	seq    uint64
-	prev   string
-	offset int64
-	now    func() time.Time
+	mu       sync.Mutex
+	f        *os.File
+	seq      uint64
+	prev     string
+	head     *Entry
+	offset   int64
+	now      func() time.Time
+	signer   Signer
+	verifier Verifier
 }
 
-func Open(path string, now func() time.Time) (*Log, error) {
+type Options struct {
+	Now      func() time.Time
+	Signer   Signer
+	Verifier Verifier
+}
+
+func Open(path string, o Options) (*Log, error) {
+	now := o.Now
 	if now == nil {
 		now = time.Now
+	}
+	if (o.Signer == nil) != (o.Verifier == nil) {
+		return nil, errors.New("audit: signer and verifier must be set together")
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, fileMode)
 	if err != nil {
@@ -70,7 +130,7 @@ func Open(path string, now func() time.Time) (*Log, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("%w: %s is a symlink", ErrInsecure, path)
 	}
-	l := &Log{f: f, prev: genesis, now: now}
+	l := &Log{f: f, prev: genesis, now: now, signer: o.Signer, verifier: o.Verifier}
 	if err := l.lock(); err != nil {
 		_ = f.Close()
 		return nil, err
@@ -108,12 +168,26 @@ func (l *Log) catchUp() error {
 		return nil
 	}
 	section := io.NewSectionReader(l.f, l.offset, size-l.offset)
-	seq, prev, err := replayFrom(section, l.seq, l.prev)
+	seq, prev, head, err := replayFrom(section, l.seq, l.prev, l.verifier != nil)
 	if err != nil {
 		return err
 	}
+	if l.verifier != nil && head != nil {
+		if err := verifyEntry(l.verifier, head); err != nil {
+			return err
+		}
+	}
 	l.seq, l.prev, l.offset = seq, prev, size
+	if head != nil {
+		l.head = head
+	}
 	return nil
+}
+
+func (l *Log) Head() (uint64, string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.seq, l.prev
 }
 
 func (l *Log) Close() error {
@@ -152,6 +226,17 @@ func (l *Log) Append(event string, fields map[string]string) error {
 		return err
 	}
 	e.Hash = h
+	if l.signer != nil {
+		msg, err := CheckpointMessage(e.Seq, e.Hash)
+		if err != nil {
+			return err
+		}
+		sig, err := l.signer.SignCheckpoint(msg)
+		if err != nil {
+			return fmt.Errorf("audit: sign checkpoint: %w", err)
+		}
+		e.Sig = hex.EncodeToString(sig)
+	}
 	line, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -166,6 +251,7 @@ func (l *Log) Append(event string, fields map[string]string) error {
 	}
 	l.seq = e.Seq
 	l.prev = e.Hash
+	l.head = e
 	l.offset += int64(n)
 	return nil
 }
@@ -201,48 +287,55 @@ func digest(e *Entry) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func replay(r io.Reader) (uint64, string, error) {
-	return replayFrom(r, 0, genesis)
-}
-
-func replayFrom(r io.Reader, seq uint64, prev string) (uint64, string, error) {
+func replayFrom(r io.Reader, seq uint64, prev string, requireSig bool) (uint64, string, *Entry, error) {
+	var head *Entry
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, maxLine), maxLine)
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(bytes.TrimSpace(line)) == 0 {
-			return 0, "", fmt.Errorf("%w: blank line after entry %d", ErrCorrupt, seq)
+			return 0, "", nil, fmt.Errorf("%w: blank line after entry %d", ErrCorrupt, seq)
 		}
 		var e Entry
 		dec := json.NewDecoder(bytes.NewReader(line))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&e); err != nil || dec.More() {
-			return 0, "", fmt.Errorf("%w: entry %d is not valid json", ErrCorrupt, seq+1)
+			return 0, "", nil, fmt.Errorf("%w: entry %d is not valid json", ErrCorrupt, seq+1)
 		}
 		if e.Seq != seq+1 || e.Prev != prev {
-			return 0, "", fmt.Errorf("%w: entry %d breaks the chain", ErrCorrupt, e.Seq)
+			return 0, "", nil, fmt.Errorf("%w: entry %d breaks the chain", ErrCorrupt, e.Seq)
 		}
 		h, err := digest(&e)
 		if err != nil || h != e.Hash {
-			return 0, "", fmt.Errorf("%w: entry %d hash mismatch", ErrCorrupt, e.Seq)
+			return 0, "", nil, fmt.Errorf("%w: entry %d hash mismatch", ErrCorrupt, e.Seq)
+		}
+		if requireSig && e.Sig == "" {
+			return 0, "", nil, fmt.Errorf("%w: entry %d is unsigned", ErrSignature, e.Seq)
 		}
 		seq = e.Seq
 		prev = e.Hash
+		entry := e
+		head = &entry
 	}
 	if err := sc.Err(); err != nil {
-		return 0, "", fmt.Errorf("%w: %v", ErrCorrupt, err)
+		return 0, "", nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
 	}
-	return seq, prev, nil
+	return seq, prev, head, nil
 }
 
-func Verify(path string) (uint64, error) {
-	f, err := os.Open(path)
+func Verify(path string, v Verifier) (uint64, error) {
+	entries, err := Read(path)
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
-	seq, _, err := replay(f)
-	return seq, err
+	if v != nil {
+		for i := range entries {
+			if err := verifyEntry(v, &entries[i]); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return uint64(len(entries)), nil
 }
 
 func Read(path string) ([]Entry, error) {
@@ -251,21 +344,23 @@ func Read(path string) ([]Entry, error) {
 		return nil, err
 	}
 	defer f.Close()
-	if _, _, err := replay(f); err != nil {
-		return nil, err
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil, err
-	}
 	var out []Entry
+	seq, prev := uint64(0), genesis
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, maxLine), maxLine)
 	for sc.Scan() {
-		var e Entry
-		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
-			return nil, ErrCorrupt
+		s, p, head, err := replayFrom(bytes.NewReader(append(sc.Bytes(), '\n')), seq, prev, false)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, e)
+		if head == nil {
+			return nil, fmt.Errorf("%w: blank line after entry %d", ErrCorrupt, seq)
+		}
+		seq, prev = s, p
+		out = append(out, *head)
 	}
-	return out, sc.Err()
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+	}
+	return out, nil
 }

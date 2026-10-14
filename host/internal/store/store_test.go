@@ -146,7 +146,10 @@ func TestMembersNodeAndInbox(t *testing.T) {
 	if err != nil || len(list) != 2 || list[0].MemberID != "alice" || list[1].Fingerprint != "fp" {
 		t.Fatalf("members: %+v %v", list, err)
 	}
-	n := &Node{MemberID: "alice", IdentityKeyID: KeyIDString([16]byte{1}), KemKeyID: KeyIDString([16]byte{2}), PQC: true, CreatedAt: 3}
+	if err := s.PutNode(&Node{MemberID: "alice", IdentityKeyID: KeyIDString([16]byte{1}), KemKeyID: KeyIDString([16]byte{1}), AuditKeyID: KeyIDString([16]byte{3})}); !errors.Is(err, ErrBadID) {
+		t.Fatalf("shared key ids accepted: %v", err)
+	}
+	n := &Node{MemberID: "alice", IdentityKeyID: KeyIDString([16]byte{1}), KemKeyID: KeyIDString([16]byte{2}), AuditKeyID: KeyIDString([16]byte{3}), PQC: true, CreatedAt: 3}
 	if err := s.PutNode(n); err != nil {
 		t.Fatal(err)
 	}

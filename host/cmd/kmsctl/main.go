@@ -37,6 +37,7 @@ commands:
   inbox accept --id ENVELOPEID
   inbox reject --id ENVELOPEID
   peer health --member MEMBER --url https://HOST:PORT
+  audit verify
   encrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   decrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   version
@@ -176,6 +177,11 @@ func (c *cli) dispatch(args []string) (int, error) {
 			return c.cmdInboxReject(ctx, args[2:])
 		}
 		return 2, fmt.Errorf("inbox: unknown subcommand %q", args[1])
+	case "audit":
+		if len(args) < 2 || args[1] != "verify" {
+			return 2, errors.New("audit: subcommand required (verify)")
+		}
+		return c.cmdAuditVerify(ctx, args[2:])
 	case "peer":
 		if len(args) < 2 || args[1] != "health" {
 			return 2, errors.New("peer: subcommand required (health)")
@@ -536,6 +542,23 @@ func (c *cli) cmdPeerHealth(ctx context.Context, args []string) (int, error) {
 		return 1, err
 	}
 	fmt.Fprintf(c.stdout, "ok\t%s\n", *member)
+	return 0, nil
+}
+
+func (c *cli) cmdAuditVerify(ctx context.Context, args []string) (int, error) {
+	if len(args) != 0 {
+		return 2, errors.New("audit verify: no arguments expected")
+	}
+	n, err := c.open(ctx)
+	if err != nil {
+		return 1, err
+	}
+	defer n.Close()
+	count, err := n.VerifyAudit()
+	if err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(c.stdout, "verified\t%d\tentries\n", count)
 	return 0, nil
 }
 

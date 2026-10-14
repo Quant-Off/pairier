@@ -32,6 +32,8 @@ var (
 	ErrSenderMismatch  = errors.New("node: envelope sender differs from the authenticated peer")
 )
 
+const auditTimeout = 10 * time.Second
+
 const SymmetricUsage = wire.UsageEncrypt | wire.UsageDecrypt | wire.UsageWrap | wire.UsageUnwrap | wire.UsageDerive | wire.UsageExport
 
 type Options struct {
@@ -51,7 +53,36 @@ type Node struct {
 	info     *store.Node
 	identity *store.KeyRecord
 	kem      *store.KeyRecord
+	auditKey *store.KeyRecord
 	tls      tls.Certificate
+}
+
+type checkpoints struct{ n *Node }
+
+func (c checkpoints) SignCheckpoint(msg []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), auditTimeout)
+	defer cancel()
+	return c.n.core.Sign(ctx, c.n.auditKey.Blob, msg)
+}
+
+func (c checkpoints) VerifyCheckpoint(msg, sig []byte) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), auditTimeout)
+	defer cancel()
+	return c.n.core.Verify(ctx, c.n.auditKey.Alg, c.n.auditKey.PublicKey, msg, sig)
+}
+
+func (n *Node) openAudit() error {
+	cp := checkpoints{n: n}
+	log, err := audit.Open(n.st.AuditLogPath(), audit.Options{Now: n.opts.Now, Signer: cp, Verifier: cp})
+	if err != nil {
+		return err
+	}
+	n.log = log
+	return nil
+}
+
+func (n *Node) VerifyAudit() (uint64, error) {
+	return audit.Verify(n.st.AuditLogPath(), checkpoints{n: n})
 }
 
 func (n *Node) audit(event string, fields map[string]string, err error) error {
@@ -106,12 +137,7 @@ func Init(ctx context.Context, o Options, memberID string, pqc bool) (*Node, err
 	if err != nil {
 		return nil, err
 	}
-	log, err := audit.Open(st.AuditLogPath(), o.Now)
-	if err != nil {
-		_ = c.Close()
-		return nil, err
-	}
-	n := &Node{opts: o, st: st, core: c, log: log}
+	n := &Node{opts: o, st: st, core: c}
 	if err := n.createIdentity(ctx, memberID, pqc); err != nil {
 		_ = n.Close()
 		return nil, err
@@ -120,7 +146,11 @@ func Init(ctx context.Context, o Options, memberID string, pqc bool) (*Node, err
 		_ = n.Close()
 		return nil, err
 	}
-	if err := n.audit("node.init", map[string]string{"member": memberID, "identity": n.identity.KeyID, "kem": n.kem.KeyID, "pqc": fmt.Sprint(pqc), "fips": fmt.Sprint(c.FIPS())}, nil); err != nil {
+	if err := n.openAudit(); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	if err := n.audit("node.init", map[string]string{"member": memberID, "identity": n.identity.KeyID, "kem": n.kem.KeyID, "audit_key": n.auditKey.KeyID, "pqc": fmt.Sprint(pqc), "fips": fmt.Sprint(c.FIPS())}, nil); err != nil {
 		_ = n.Close()
 		return nil, err
 	}
@@ -156,6 +186,10 @@ func (n *Node) createIdentity(ctx context.Context, memberID string, pqc bool) er
 	if err != nil {
 		return err
 	}
+	ak, err := n.core.GenerateKey(ctx, sigAlg, wire.UsageSign, "audit/"+memberID)
+	if err != nil {
+		return err
+	}
 	n.identity = &store.KeyRecord{KeyID: store.KeyIDString(id.KeyID), Alg: sigAlg, Usage: wire.UsageSign, Label: "identity/" + memberID, Blob: id.Blob, PublicKey: id.PublicKey, CreatedAt: now}
 	n.kem = &store.KeyRecord{KeyID: store.KeyIDString(kem.KeyID), Alg: kemAlg, Usage: wire.UsageDecapsulate, Label: "kem/" + memberID, Blob: kem.Blob, PublicKey: kem.PublicKey, CreatedAt: now}
 	if err := n.st.PutKey(n.identity); err != nil {
@@ -164,7 +198,11 @@ func (n *Node) createIdentity(ctx context.Context, memberID string, pqc bool) er
 	if err := n.st.PutKey(n.kem); err != nil {
 		return err
 	}
-	n.info = &store.Node{MemberID: memberID, IdentityKeyID: n.identity.KeyID, KemKeyID: n.kem.KeyID, PQC: pqc, CreatedAt: now}
+	n.auditKey = &store.KeyRecord{KeyID: store.KeyIDString(ak.KeyID), Alg: sigAlg, Usage: wire.UsageSign, Label: "audit/" + memberID, Blob: ak.Blob, PublicKey: ak.PublicKey, CreatedAt: now}
+	if err := n.st.PutKey(n.auditKey); err != nil {
+		return err
+	}
+	n.info = &store.Node{MemberID: memberID, IdentityKeyID: n.identity.KeyID, KemKeyID: n.kem.KeyID, AuditKeyID: n.auditKey.KeyID, PQC: pqc, CreatedAt: now}
 	return n.st.PutNode(n.info)
 }
 
@@ -181,12 +219,7 @@ func Open(ctx context.Context, o Options) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	log, err := audit.Open(st.AuditLogPath(), o.Now)
-	if err != nil {
-		_ = c.Close()
-		return nil, err
-	}
-	n := &Node{opts: o, st: st, core: c, log: log, info: info}
+	n := &Node{opts: o, st: st, core: c, info: info}
 	if info.PQC && !c.PQC() {
 		_ = n.Close()
 		return nil, ErrPQCUnavailable
@@ -199,13 +232,22 @@ func Open(ctx context.Context, o Options) (*Node, error) {
 		_ = n.Close()
 		return nil, fmt.Errorf("node: kem key: %w", err)
 	}
-	if n.identity.Usage != wire.UsageSign || !exchange.IsSignatureAlg(n.identity.Alg) ||
-		n.kem.Usage != wire.UsageDecapsulate || !exchange.IsKemAlg(n.kem.Alg) ||
-		len(n.identity.PublicKey) == 0 || len(n.kem.PublicKey) == 0 {
+	if n.auditKey, err = n.Key(ctx, info.AuditKeyID); err != nil {
+		_ = n.Close()
+		return nil, fmt.Errorf("node: audit key: %w", err)
+	}
+	if n.identity.Usage != wire.UsageSign || !exchange.IsSignatureAlg(n.identity.Alg) || n.identity.Label != "identity/"+info.MemberID ||
+		n.kem.Usage != wire.UsageDecapsulate || !exchange.IsKemAlg(n.kem.Alg) || n.kem.Label != "kem/"+info.MemberID ||
+		n.auditKey.Usage != wire.UsageSign || !exchange.IsSignatureAlg(n.auditKey.Alg) || n.auditKey.Label != "audit/"+info.MemberID ||
+		len(n.identity.PublicKey) == 0 || len(n.kem.PublicKey) == 0 || len(n.auditKey.PublicKey) == 0 {
 		_ = n.Close()
 		return nil, ErrMetadata
 	}
 	if err := n.loadTLS(ctx); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	if err := n.openAudit(); err != nil {
 		_ = n.Close()
 		return nil, err
 	}
@@ -217,9 +259,12 @@ func Open(ctx context.Context, o Options) (*Node, error) {
 }
 
 func (n *Node) Close() error {
+	var lerr error
+	if n.log != nil {
+		lerr = n.log.Close()
+	}
 	cerr := n.core.Close()
-	lerr := n.log.Close()
-	return errors.Join(cerr, lerr)
+	return errors.Join(lerr, cerr)
 }
 
 func (n *Node) AuditLogPath() string { return n.st.AuditLogPath() }
