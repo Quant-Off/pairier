@@ -151,4 +151,5 @@ jobs:
           name: pairier-${{ matrix.os }}
           path: |
             dist/*.tar.gz
+            dist/*.cdx.json
             dist/SHA256SUMS

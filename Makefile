@@ -76,7 +76,11 @@ update:
 
 dist: build
 	mkdir -p $(DIST_DIR)
-	./scripts/dist.sh $(VERSION) $(CORE_RELEASE) $(HOST_DIR)/bin/kmsd $(HOST_DIR)/bin/kmsctl $(DIST_DIR)
+	python3 -I scripts/sbom.py --version $(VERSION) --cargo "$(CARGO)" --core-flags "$(CORE_FLAGS)" \
+		--go-binary $(HOST_DIR)/bin/kmsd --go-binary $(HOST_DIR)/bin/kmsctl \
+		--epoch $(SOURCE_DATE_EPOCH) --out $(DIST_DIR)/sbom.cdx.json
+	./scripts/dist.sh $(VERSION) $(CORE_RELEASE) $(HOST_DIR)/bin/kmsd $(HOST_DIR)/bin/kmsctl $(DIST_DIR) $(DIST_DIR)/sbom.cdx.json
+	rm -f $(DIST_DIR)/sbom.cdx.json
 
 audit:
 	cd $(CORE_DIR) && $(CARGO) deny check --disable-fetch advisories licenses bans sources

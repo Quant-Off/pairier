@@ -6,6 +6,7 @@ core_bin="$2"
 kmsd_bin="$3"
 kmsctl_bin="$4"
 out_dir="$5"
+sbom="$6"
 epoch="${SOURCE_DATE_EPOCH:-0}"
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -35,7 +36,8 @@ chmod 0755 "$stage"/*
 "$stage/kms-core" --version > "$stage/VERSION"
 "$stage/kmsd" --version >> "$stage/VERSION"
 "$stage/kmsctl" version >> "$stage/VERSION"
-chmod 0644 "$stage/VERSION"
+cp "$sbom" "$stage/sbom.cdx.json"
+chmod 0644 "$stage/VERSION" "$stage/sbom.cdx.json"
 
 (
   cd "$out_dir"
@@ -44,12 +46,15 @@ chmod 0644 "$stage/VERSION"
       --owner=0 --group=0 --numeric-owner \
       --mtime="@$epoch" --format=gnu \
       -cf - | gzip -n -9 > "$name.tar.gz"
+  cp "$name/sbom.cdx.json" "$name.cdx.json"
   rm -rf "$name"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+    sum="sha256sum"
   else
-    shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+    sum="shasum -a 256"
   fi
-  cat ./*.tar.gz.sha256 | LC_ALL=C sort > SHA256SUMS
+  $sum "$name.tar.gz" > "$name.tar.gz.sha256"
+  $sum "$name.cdx.json" > "$name.cdx.json.sha256"
+  cat ./*.sha256 | LC_ALL=C sort > SHA256SUMS
 )
 echo "$out_dir/$name.tar.gz"
