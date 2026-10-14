@@ -75,12 +75,17 @@ pairier는 "Abandon trust. Choose isolation." 원칙으로 설계되었습니다
 릴리즈 tarball은 [minisign](https://jedisct1.github.io/minisign/)으로 서명합니다. 서명 키는 오프라인에서 생성·보관하며 CI에서는 사용할 수 없습니다.
 
 - 공개키: 저장소 루트의 `minisign.pub`
+- 키 id: `5AE4F2AC05D840CA`
+- 키: `RWTKQNgFrPLkWgNMj67g1XXR7A7IWAfeXYtnGZ1At0+QFEoUUqFZg7pP`
 - 키를 처음 신뢰하기 전에, 이 저장소가 아닌 다른 경로로 받은 사본과 키 문자열 전체를 비교하세요.
 
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
+$ minisign -Vm SHA256SUMS -P RWTKQNgFrPLkWgNMj67g1XXR7A7IWAfeXYtnGZ1At0+QFEoUUqFZg7pP
 $ sha256sum -c SHA256SUMS
 ```
+
+두 방식 모두 동일하게 동작합니다. 첫 번째는 키 파일을, 두 번째는 키 문자열 자체를 사용합니다.
 
 릴리즈는 재현 가능합니다. 고정된 툴체인으로 Linux에서 `make dist FIPS=1`을 실행하면 바이트 단위로 동일한 tarball이 생성되므로, 서명 확인 대신 또는 서명 확인과 함께 직접 빌드해 `SHA256SUMS`를 비교할 수 있습니다.
 

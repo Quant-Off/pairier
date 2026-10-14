@@ -75,12 +75,17 @@ These are design choices or open items that are disclosed here rather than treat
 Release tarballs are signed with [minisign](https://jedisct1.github.io/minisign/). The signing key is generated and kept offline and is never available to CI.
 
 - Public key: `minisign.pub` in the repository root
+- Key id: `5AE4F2AC05D840CA`
+- Key: `RWTKQNgFrPLkWgNMj67g1XXR7A7IWAfeXYtnGZ1At0+QFEoUUqFZg7pP`
 - Before trusting the key for the first time, compare the full key string with a copy obtained through a channel other than this repository.
 
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
+$ minisign -Vm SHA256SUMS -P RWTKQNgFrPLkWgNMj67g1XXR7A7IWAfeXYtnGZ1At0+QFEoUUqFZg7pP
 $ sha256sum -c SHA256SUMS
 ```
+
+Either form works. The first uses the key file, the second the key string itself.
 
 Releases are also reproducible. `make dist FIPS=1` on Linux with the pinned toolchains produces a byte-identical tarball, so you can rebuild and compare `SHA256SUMS` instead of, or in addition to, checking the signature.
 
