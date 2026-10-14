@@ -21,18 +21,22 @@ export CGO_ENABLED := 0
 RUST_TOOLCHAIN := $(shell sed -n 's/^channel = "\(.*\)"/\1/p' $(CORE_DIR)/rust-toolchain.toml)
 VERSION        := $(shell sed -n 's/^version = "\(.*\)"/\1/p' $(CORE_DIR)/Cargo.toml | head -1)
 GO_LDFLAGS     := -s -w -X main.version=$(VERSION)
+SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
+export SOURCE_DATE_EPOCH
+DIST_DIR       := dist
+CORE_RELEASE   := $(abspath $(CORE_DIR)/target/release/kms-core)
 CARGO_NET      := $(CARGO) +$(RUST_TOOLCHAIN)
 CORE_MANIFEST  := --manifest-path $(CORE_DIR)/Cargo.toml
 GO_NET         := GOPROXY=https://proxy.golang.org,direct GOFLAGS=-trimpath $(GO)
 
-.PHONY: all build build-core build-host test test-core test-host lint lint-core lint-host fmt vendor update clean
+.PHONY: all build build-core build-host test test-core test-host lint lint-core lint-host fmt vendor update clean dist audit
 
 all: build
 
 build: build-core build-host
 
 build-core:
-	cd $(CORE_DIR) && $(CARGO) build --release --frozen -p kms-core $(CORE_FLAGS)
+	cd $(CORE_DIR) && RUSTFLAGS="--remap-path-prefix=$(abspath .)=/pairier $(RUSTFLAGS)" $(CARGO) build --release --frozen -p kms-core $(CORE_FLAGS)
 
 build-host:
 	cd $(HOST_DIR) && $(GO) build -ldflags "$(GO_LDFLAGS)" -o bin/ ./cmd/...
@@ -44,7 +48,7 @@ test-core:
 
 test-host:
 	cd $(CORE_DIR) && $(CARGO) build --frozen -p kms-core --features pqc
-	cd $(HOST_DIR) && KMS_CORE_BIN=$(KMS_CORE_BIN) $(GO) test -race ./...
+	cd $(HOST_DIR) && CGO_ENABLED=1 KMS_CORE_BIN=$(KMS_CORE_BIN) $(GO) test -race ./...
 
 lint: lint-core lint-host
 
@@ -68,6 +72,15 @@ update:
 	$(CARGO_NET) update $(CORE_MANIFEST)
 	cd $(HOST_DIR) && $(GO_NET) get -u ./... && $(GO_NET) mod tidy
 
+dist: build
+	mkdir -p $(DIST_DIR)
+	./scripts/dist.sh $(VERSION) $(CORE_RELEASE) $(HOST_DIR)/bin/kmsd $(HOST_DIR)/bin/kmsctl $(DIST_DIR)
+
+audit:
+	cd $(CORE_DIR) && $(CARGO) deny check licenses bans sources
+	cd $(CORE_DIR) && if [ -d "$$HOME/.cargo/advisory-db" ]; then $(CARGO) audit --no-fetch; else echo "advisory db missing, run: cargo audit fetch (online) or copy ~/.cargo/advisory-db"; fi
+	@command -v govulncheck >/dev/null && (cd $(HOST_DIR) && govulncheck ./...) || echo "govulncheck not installed, skipping"
+
 clean:
 	cd $(CORE_DIR) && $(CARGO) clean
-	rm -rf $(HOST_DIR)/bin
+	rm -rf $(HOST_DIR)/bin $(DIST_DIR)
