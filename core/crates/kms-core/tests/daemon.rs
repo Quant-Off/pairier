@@ -238,3 +238,95 @@ fn bad_arguments_fail_fast() {
     assert!(!ok);
     assert!(err.contains("usage"), "stderr: {err}");
 }
+
+fn wait_for(path: &PathBuf) -> fs::Metadata {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(md) = fs::symlink_metadata(path) {
+            return md;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{} never appeared",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn private_dir(tag: &str) -> PathBuf {
+    let d = scratch(tag);
+    let _ = fs::remove_dir_all(&d);
+    fs::create_dir(&d).unwrap();
+    fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
+    d
+}
+
+#[test]
+fn same_uid_socket_is_owner_only() {
+    let dir = private_dir("own-dir");
+    let sock = dir.join("core.sock");
+    let child = spawn(&[
+        "--socket",
+        sock.to_str().unwrap(),
+        "--ephemeral-root",
+        "--allow-unlocked-memory",
+    ]);
+    assert_eq!(wait_for(&sock).permissions().mode() & 0o077, 0);
+    let mut s = connect(&sock);
+    let (h, _) = roundtrip(
+        &mut s,
+        1,
+        &HelloRequest {
+            protocol_version: PROTOCOL_VERSION,
+        },
+    );
+    assert_eq!(h.status, Status::Ok);
+    drop(s);
+    let _ = finish(child);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn foreign_uid_is_rejected_without_ending_the_daemon() {
+    let dir = private_dir("foreign-dir");
+    let sock = dir.join("core.sock");
+    let other = kms_sys::peer::current_uid().wrapping_add(1).to_string();
+    let mut child = spawn(&[
+        "--socket",
+        sock.to_str().unwrap(),
+        "--ephemeral-root",
+        "--allow-unlocked-memory",
+        "--peer-uid",
+        &other,
+    ]);
+    assert_eq!(wait_for(&sock).permissions().mode() & 0o777, 0o666);
+    let mut s = connect(&sock);
+    let mut buf = [0u8; 1];
+    assert_eq!(s.read(&mut buf).unwrap_or(0), 0, "foreign peer was served");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(child.try_wait().unwrap().is_none(), "daemon exited");
+    assert!(sock.exists(), "socket removed before an accepted peer");
+    child.kill().unwrap();
+    let (_, err) = finish(child);
+    assert!(err.contains("rejected connection"), "{err}");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn shared_socket_directory_is_refused() {
+    let dir = private_dir("shared-dir");
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+    let sock = dir.join("core.sock");
+    let child = spawn(&[
+        "--socket",
+        sock.to_str().unwrap(),
+        "--ephemeral-root",
+        "--allow-unlocked-memory",
+    ]);
+    let (ok, err) = finish(child);
+    assert!(!ok);
+    assert!(err.contains("writable by other users"), "{err}");
+    assert!(!sock.exists());
+    fs::remove_dir_all(&dir).unwrap();
+}
