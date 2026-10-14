@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Quant-Off/pairier/host/internal/audit"
 	"github.com/Quant-Off/pairier/host/internal/core"
@@ -34,6 +36,7 @@ var (
 	ErrUsageNotAllowed = errors.New("node: usage not allowed for this key kind")
 	ErrSenderMismatch  = errors.New("node: envelope sender differs from the authenticated peer")
 	ErrInboxFull       = errors.New("node: too many pending envelopes from this sender")
+	ErrLabel           = errors.New("node: label contains control or bidirectional formatting characters")
 )
 
 const auditTimeout = 10 * time.Second
@@ -330,12 +333,29 @@ func (n *Node) Key(ctx context.Context, id string) (*store.KeyRecord, error) {
 
 func (n *Node) Keys() ([]*store.KeyRecord, error) { return n.st.ListKeys() }
 
+func ValidLabel(label string) bool {
+	if !utf8.ValidString(label) {
+		return false
+	}
+	for _, r := range label {
+		switch {
+		case unicode.IsControl(r), r == 0x061c, r == 0x200e, r == 0x200f,
+			r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+			return false
+		}
+	}
+	return true
+}
+
 func (n *Node) GenerateKey(ctx context.Context, label string, usage uint32) (*store.KeyRecord, error) {
 	if usage == 0 || usage&^SymmetricUsage != 0 {
 		return nil, ErrUsageNotAllowed
 	}
 	if len(label) > wire.MaxLabel {
 		return nil, fmt.Errorf("node: label exceeds %d bytes", wire.MaxLabel)
+	}
+	if !ValidLabel(label) {
+		return nil, ErrLabel
 	}
 	k, err := n.core.GenerateKey(ctx, wire.AlgAES256GCM, usage, label)
 	if err != nil {

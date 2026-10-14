@@ -87,10 +87,23 @@ fn encode_header(h: &Header<'_>, salt: &[u8; SALT_LEN]) -> Result<Vec<u8>, Error
     Ok(w.finish())
 }
 
-pub(crate) fn seal(root: &RootKey, h: &Header<'_>, secret: &[u8]) -> Result<Vec<u8>, Error> {
-    if h.label.len() > MAX_LABEL {
+pub(crate) fn check_label(label: &str) -> Result<(), Error> {
+    if label.len() > MAX_LABEL || label.chars().any(forbidden_in_label) {
         return Err(Error::InvalidArgument);
     }
+    Ok(())
+}
+
+fn forbidden_in_label(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+pub(crate) fn seal(root: &RootKey, h: &Header<'_>, secret: &[u8]) -> Result<Vec<u8>, Error> {
+    check_label(h.label)?;
     let salt = kdf::random_salt()?;
     let aad = encode_header(h, &salt)?;
     let d = kdf::derive_aead(root.as_bytes(), &salt, &[INFO, &h.key_id])?;
@@ -153,7 +166,7 @@ pub(crate) fn open(root: &RootKey, blob: &[u8]) -> Result<Unsealed, Error> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
-    use super::{Header, open, seal};
+    use super::{Header, check_label, open, seal};
     use crate::alg::Alg;
     use crate::error::Error;
     use crate::root::RootKey;
@@ -201,5 +214,39 @@ mod tests {
             Error::InvalidKeyBlob
         );
         assert_eq!(open(&root, &[]).unwrap_err(), Error::InvalidKeyBlob);
+    }
+
+    #[test]
+    fn labels_reject_control_and_bidi_characters() {
+        for ok in ["", "team/a", "프로젝트/db", "a b-c_d.e"] {
+            assert!(check_label(ok).is_ok(), "{ok:?}");
+        }
+        for bad in [
+            "a\nb",
+            "a\tb",
+            "\u{1b}[2J",
+            "a\u{7f}",
+            "a\u{85}",
+            "a\u{202e}b",
+            "\u{2066}x",
+            "a\u{200f}",
+        ] {
+            assert_eq!(
+                check_label(bad).unwrap_err(),
+                Error::InvalidArgument,
+                "{bad:?}"
+            );
+        }
+        let root = RootKey::generate().unwrap();
+        let h = Header {
+            alg: Alg::Aes256Gcm,
+            usage: Usage::from_bits(kms_wire::usage::ENCRYPT).unwrap(),
+            key_id: [2u8; 16],
+            label: "x\ny",
+        };
+        assert_eq!(
+            seal(&root, &h, &[0u8; 32]).unwrap_err(),
+            Error::InvalidArgument
+        );
     }
 }

@@ -11,7 +11,7 @@ mod root;
 mod sign;
 mod usage;
 
-use kms_wire::msg::{KEY_ID_LEN, MAX_LABEL, MAX_RANDOM};
+use kms_wire::msg::{KEY_ID_LEN, MAX_RANDOM};
 use zeroize::Zeroizing;
 
 pub use alg::{Alg, AlgKind};
@@ -96,9 +96,7 @@ impl Engine {
     pub fn generate_key(&self, alg: Alg, usage: Usage, label: &str) -> Result<GeneratedKey, Error> {
         self.check_enabled(alg)?;
         usage.check_for(alg)?;
-        if label.len() > MAX_LABEL {
-            return Err(Error::InvalidArgument);
-        }
+        blob::check_label(label)?;
         let mut key_id = [0u8; KEY_ID_LEN];
         aws_lc_rs::rand::fill(&mut key_id).map_err(|_| Error::Internal)?;
 

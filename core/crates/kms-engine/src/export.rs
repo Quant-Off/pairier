@@ -5,6 +5,7 @@ use kms_wire::{Reader, Writer};
 use zeroize::Zeroizing;
 
 use crate::alg::{Alg, AlgKind};
+use crate::blob;
 use crate::error::Error;
 use crate::kdf::{self, SALT_LEN, TAG_LEN};
 use crate::kem;
@@ -68,6 +69,7 @@ fn parse_header<'a>(r: &mut Reader<'a>) -> Result<ParsedHeader<'a>, Error> {
         .read_array::<KEY_ID_LEN>()
         .map_err(|_| Error::InvalidArgument)?;
     let label = r.read_str(MAX_LABEL).map_err(|_| Error::InvalidArgument)?;
+    blob::check_label(label)?;
     let context = r
         .read_bytes(MAX_CONTEXT)
         .map_err(|_| Error::InvalidArgument)?;
@@ -103,9 +105,7 @@ pub(crate) fn seal(
     if e.kem_alg.kind() != AlgKind::Kem {
         return Err(Error::InvalidArgument);
     }
-    if e.label.len() > MAX_LABEL {
-        return Err(Error::InvalidArgument);
-    }
+    blob::check_label(e.label)?;
     if e.context.len() > MAX_CONTEXT {
         return Err(Error::LimitExceeded);
     }
@@ -172,4 +172,38 @@ pub(crate) fn open(
         label: h.label.to_owned(),
         secret: buf,
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use kms_wire::Reader;
+
+    use super::{Export, encode_header, parse_header};
+    use crate::alg::Alg;
+    use crate::error::Error;
+    use crate::usage::Usage;
+
+    #[test]
+    fn imported_label_must_be_printable() {
+        let bad = Export {
+            kem_alg: Alg::DhkemP256,
+            alg: Alg::Aes256Gcm,
+            usage: Usage::from_bits(kms_wire::usage::DECRYPT).unwrap(),
+            key_id: [3u8; 16],
+            label: "a\u{1b}[2Jb",
+            context: b"ctx",
+        };
+        let raw = encode_header(&bad, &[0u8; 32], &[4u8; 65]).unwrap();
+        assert_eq!(
+            parse_header(&mut Reader::new(&raw)).err(),
+            Some(Error::InvalidArgument)
+        );
+        let good = Export {
+            label: "a/b",
+            ..bad
+        };
+        let raw = encode_header(&good, &[0u8; 32], &[4u8; 65]).unwrap();
+        assert!(parse_header(&mut Reader::new(&raw)).is_ok());
+    }
 }

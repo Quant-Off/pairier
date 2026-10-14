@@ -524,3 +524,19 @@ func TestInboxPendingLimitPerSender(t *testing.T) {
 		t.Fatalf("slot not freed after reject: %v", err)
 	}
 }
+
+func TestLabelsRejectControlCharacters(t *testing.T) {
+	ctx := context.Background()
+	alice, _ := initNode(t, "alice", false)
+	for _, l := range []string{"a\nb", "\x1b[2J", "a‮b", "⁦x", "a\x7f", "a\u0085", "\xff"} {
+		if _, err := alice.GenerateKey(ctx, l, wire.UsageEncrypt); !errors.Is(err, ErrLabel) {
+			t.Fatalf("%q accepted: %v", l, err)
+		}
+	}
+	if _, err := alice.GenerateKey(ctx, "프로젝트/db", wire.UsageEncrypt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.core.GenerateKey(ctx, wire.AlgAES256GCM, wire.UsageEncrypt, "a\nb"); err == nil {
+		t.Fatal("core accepted a control character in a label")
+	}
+}
