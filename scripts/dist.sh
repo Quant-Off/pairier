@@ -8,6 +8,7 @@ kmsctl_bin="$4"
 out_dir="$5"
 sbom="$6"
 epoch="${SOURCE_DATE_EPOCH:-0}"
+root=$(cd "$(dirname "$0")/.." && pwd)
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m)
@@ -37,7 +38,9 @@ chmod 0755 "$stage"/*
 "$stage/kmsd" --version >> "$stage/VERSION"
 "$stage/kmsctl" version >> "$stage/VERSION"
 cp "$sbom" "$stage/sbom.cdx.json"
-chmod 0644 "$stage/VERSION" "$stage/sbom.cdx.json"
+cp "$root/LICENSE" "$stage/LICENSE"
+cp "$root/NOTICE" "$stage/NOTICE"
+chmod 0644 "$stage/VERSION" "$stage/sbom.cdx.json" "$stage/LICENSE" "$stage/NOTICE"
 
 (
   cd "$out_dir"

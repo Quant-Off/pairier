@@ -133,7 +133,7 @@ def main():
         "version": 1,
         "metadata": {
             "timestamp": datetime.datetime.fromtimestamp(a.epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "component": {"type": "application", "bom-ref": top, "name": "pairier", "version": a.version},
+            "component": {"type": "application", "bom-ref": top, "name": "pairier", "version": a.version, "licenses": [{"expression": "Apache-2.0"}]},
             "properties": [{"name": "pairier:core-flags", "value": a.core_flags.strip()}],
         },
         "components": sorted(cc + gc, key=lambda c: c["bom-ref"]),
