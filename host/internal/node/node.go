@@ -532,6 +532,17 @@ func (n *Node) StoreInbox(ctx context.Context, raw []byte, from string) (*store.
 }
 
 func (n *Node) storeInbox(ctx context.Context, raw []byte, from string) (*store.InboxRecord, error) {
+	env, err := exchange.DecodeEnvelope(raw)
+	if err != nil {
+		return nil, err
+	}
+	claimed, err := exchange.DecodeContext(env.Context)
+	if err != nil {
+		return nil, err
+	}
+	if claimed.Sender != from {
+		return nil, ErrSenderMismatch
+	}
 	_, ectx, err := n.verifyEnvelope(ctx, raw)
 	if err != nil {
 		return nil, err

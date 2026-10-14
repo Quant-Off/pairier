@@ -191,7 +191,19 @@ func TestMembersNodeAndInbox(t *testing.T) {
 	if err := s.DeleteInbox(rec.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(s.Dir(), "inbox", rec.ID+".json.tmp")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("temp file left behind")
+	leftovers, _ := filepath.Glob(filepath.Join(s.Dir(), "*", ".*.tmp"))
+	if len(leftovers) != 0 {
+		t.Fatalf("temp files left behind: %v", leftovers)
+	}
+	stale := filepath.Join(s.Dir(), "inbox", "."+InboxID([]byte("next"))+".json.123.tmp")
+	if err := os.WriteFile(stale, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	next := &InboxRecord{ID: InboxID([]byte("next")), Envelope: []byte("next")}
+	if err := s.PutInbox(next); err != nil {
+		t.Fatalf("stale temp file blocked a write: %v", err)
+	}
+	if list, err := s.ListInbox(); err != nil || len(list) != 1 {
+		t.Fatalf("stale temp file confused listing: %v %v", list, err)
 	}
 }

@@ -599,11 +599,26 @@ func (c *cli) cmdCrypt(ctx context.Context, args []string, encrypt bool) (int, e
 	return 0, nil
 }
 
+const maxInput = 1 << 20
+
 func (c *cli) readIn(path string) ([]byte, error) {
-	if path == "" {
-		return io.ReadAll(io.LimitReader(c.stdin, 1<<20))
+	var r io.Reader = c.stdin
+	if path != "" {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		r = f
 	}
-	return os.ReadFile(path)
+	b, err := io.ReadAll(io.LimitReader(r, maxInput+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxInput {
+		return nil, fmt.Errorf("input exceeds %d bytes", maxInput)
+	}
+	return b, nil
 }
 
 func (c *cli) writeOut(path string, data []byte) error {

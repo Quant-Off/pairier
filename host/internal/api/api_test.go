@@ -149,7 +149,45 @@ func TestPushInboxAndAccept(t *testing.T) {
 	if _, err := bob.StoreInbox(ctx, env2, "carol"); !errors.Is(err, node.ErrSenderMismatch) {
 		t.Fatalf("sender mismatch accepted: %v", err)
 	}
+	trust(t, carol, bob)
+	envFromCarol, err := carol.Send(ctx, mustKey(t, carol), "bob", wire.UsageDecrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewClient(alice, nil).Push(ctx, bobURL, "bob", envFromCarol); err == nil || !strings.Contains(err.Error(), "400") {
+		t.Fatalf("relayed envelope from another sender accepted: %v", err)
+	}
+	dave := initNode(t, "dave")
+	trust(t, dave, carol)
+	envFromDave, err := dave.Send(ctx, mustKey(t, dave), "carol", wire.UsageDecrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.StoreInbox(ctx, envFromDave, "dave"); !errors.Is(err, node.ErrNotRecipient) {
+		t.Fatalf("envelope for another recipient accepted: %v", err)
+	}
+	cb, rawB, _ := bob.Card(ctx)
+	fpB, _ := cb.Fingerprint()
+	if _, err := dave.AddMember(ctx, rawB, fpB); err != nil {
+		t.Fatal(err)
+	}
+	envToBob, err := dave.Send(ctx, mustKey(t, dave), "bob", wire.UsageDecrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.StoreInbox(ctx, envToBob, "dave"); !errors.Is(err, node.ErrUnknownMember) {
+		t.Fatalf("envelope from an unknown member accepted: %v", err)
+	}
 	if _, err := bob.StoreInbox(ctx, []byte("junk"), "alice"); !errors.Is(err, exchange.ErrFormat) {
 		t.Fatalf("junk accepted: %v", err)
 	}
+}
+
+func mustKey(t *testing.T, n *node.Node) string {
+	t.Helper()
+	k, err := n.GenerateKey(context.Background(), "relay", wire.UsageDecrypt|wire.UsageExport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k.KeyID
 }

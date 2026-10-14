@@ -360,7 +360,7 @@ func (s *Store) listIDs(sub, ext string, valid func(string) bool) ([]string, err
 	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
 		name := e.Name()
-		if e.Type()&fs.ModeType != 0 || !strings.HasSuffix(name, ext) {
+		if e.Type()&fs.ModeType != 0 || !strings.HasSuffix(name, ext) || strings.HasPrefix(name, ".") {
 			continue
 		}
 		id := strings.TrimSuffix(name, ext)
@@ -413,9 +413,14 @@ func (s *Store) writeNew(rel string, v any) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode)
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if err := f.Chmod(fileMode); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
