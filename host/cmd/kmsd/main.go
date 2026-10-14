@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,7 +27,50 @@ var version = "dev"
 const (
 	defaultListen  = "127.0.0.1:7443"
 	defaultTimeout = 10 * time.Second
+	maxConns       = 64
 )
+
+type limitListener struct {
+	net.Listener
+	sem  chan struct{}
+	done chan struct{}
+	once sync.Once
+}
+
+func limit(ln net.Listener, n int) net.Listener {
+	return &limitListener{Listener: ln, sem: make(chan struct{}, n), done: make(chan struct{})}
+}
+
+func (l *limitListener) Accept() (net.Conn, error) {
+	select {
+	case l.sem <- struct{}{}:
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+	c, err := l.Listener.Accept()
+	if err != nil {
+		<-l.sem
+		return nil, err
+	}
+	return &limitConn{Conn: c, release: func() { <-l.sem }}, nil
+}
+
+func (l *limitListener) Close() error {
+	l.once.Do(func() { close(l.done) })
+	return l.Listener.Close()
+}
+
+type limitConn struct {
+	net.Conn
+	once    sync.Once
+	release func()
+}
+
+func (c *limitConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.release)
+	return err
+}
 
 type settings struct {
 	node   node.Options
@@ -151,7 +195,7 @@ func serve(ctx context.Context, s settings, stderr io.Writer, ready func(addr st
 		ready(ln.Addr().String())
 	}
 	errc := make(chan error, 1)
-	go func() { errc <- hs.ServeTLS(ln, "", "") }()
+	go func() { errc <- hs.ServeTLS(limit(ln, maxConns), "", "") }()
 	select {
 	case err := <-errc:
 		if errors.Is(err, http.ErrServerClosed) {

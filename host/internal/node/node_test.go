@@ -412,6 +412,31 @@ func TestPQCNodes(t *testing.T) {
 	}
 }
 
+func TestUnknownPeerNeedsNoCoreCall(t *testing.T) {
+	ctx := context.Background()
+	alice, _ := initNode(t, "alice", false)
+	bob, _ := initNode(t, "bob", false)
+	pair(t, alice, bob)
+	if err := alice.core.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		id   string
+		spki []byte
+	}{
+		{"carol", bob.TLSPublicKey()},
+		{"bob", alice.TLSPublicKey()},
+		{"bob", []byte("stranger")},
+	} {
+		if _, err := alice.MemberByTLS(ctx, c.id, c.spki); !errors.Is(err, ErrUnknownMember) {
+			t.Fatalf("%s: unknown peer reached the core: %v", c.id, err)
+		}
+	}
+	if _, err := alice.MemberByTLS(ctx, "bob", bob.TLSPublicKey()); err == nil || errors.Is(err, ErrUnknownMember) {
+		t.Fatalf("known peer must still be verified by the core: %v", err)
+	}
+}
+
 func TestTLSMaterialAndPeerLookup(t *testing.T) {
 	ctx := context.Background()
 	alice, aliceOpts := initNode(t, "alice", false)
@@ -424,15 +449,23 @@ func TestTLSMaterialAndPeerLookup(t *testing.T) {
 		t.Fatalf("card tls key mismatch: %v", err)
 	}
 	pair(t, alice, bob)
-	found, err := alice.MemberByTLSKey(ctx, bob.TLSPublicKey())
+	found, err := alice.MemberByTLS(ctx, "bob", bob.TLSPublicKey())
 	if err != nil || found.MemberID != "bob" {
 		t.Fatalf("lookup: %+v %v", found, err)
 	}
-	if _, err := alice.MemberByTLSKey(ctx, alice.TLSPublicKey()); !errors.Is(err, ErrUnknownMember) {
-		t.Fatalf("own key resolved to a member: %v", err)
-	}
-	if _, err := alice.MemberByTLSKey(ctx, nil); !errors.Is(err, ErrUnknownMember) {
-		t.Fatalf("empty key resolved: %v", err)
+	for _, c := range []struct {
+		id   string
+		spki []byte
+	}{
+		{"alice", alice.TLSPublicKey()},
+		{"bob", alice.TLSPublicKey()},
+		{"carol", bob.TLSPublicKey()},
+		{"../bob", bob.TLSPublicKey()},
+		{"bob", nil},
+	} {
+		if _, err := alice.MemberByTLS(ctx, c.id, c.spki); !errors.Is(err, ErrUnknownMember) {
+			t.Fatalf("%s resolved: %v", c.id, err)
+		}
 	}
 	spki := alice.TLSPublicKey()
 	if err := alice.Close(); err != nil {

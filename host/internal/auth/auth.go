@@ -18,7 +18,7 @@ var (
 )
 
 type Resolver interface {
-	MemberByTLSKey(ctx context.Context, spki []byte) (*exchange.Card, error)
+	MemberByTLS(ctx context.Context, memberID string, spki []byte) (*exchange.Card, error)
 }
 
 func leaf(raw [][]byte, now time.Time) (*x509.Certificate, error) {
@@ -46,7 +46,7 @@ func Peer(ctx context.Context, r Resolver, cs *tls.ConnectionState, now time.Tim
 	if err != nil {
 		return nil, err
 	}
-	card, err := r.MemberByTLSKey(ctx, c.RawSubjectPublicKeyInfo)
+	card, err := r.MemberByTLS(ctx, c.Subject.CommonName, c.RawSubjectPublicKeyInfo)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnknownPeer, err)
 	}
@@ -68,7 +68,7 @@ func ServerTLSConfig(cert tls.Certificate, r Resolver, now func() time.Time) *tl
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			card, err := r.MemberByTLSKey(ctx, c.RawSubjectPublicKeyInfo)
+			card, err := r.MemberByTLS(ctx, c.Subject.CommonName, c.RawSubjectPublicKeyInfo)
 			if err != nil {
 				return fmt.Errorf("%w: %v", ErrUnknownPeer, err)
 			}

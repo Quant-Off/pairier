@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,5 +141,62 @@ func TestServeAndShutdown(t *testing.T) {
 	items, err := reopened.Inbox()
 	if err != nil || len(items) != 1 || items[0].Sender != "alice" {
 		t.Fatalf("inbox %+v %v", items, err)
+	}
+}
+
+func TestLimitListener(t *testing.T) {
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := limit(raw, 1)
+	defer ln.Close()
+	accepted := make(chan net.Conn, 2)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				close(accepted)
+				return
+			}
+			accepted <- c
+		}
+	}()
+	dial := func() net.Conn {
+		c, err := net.Dial("tcp", raw.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	c1, c2 := dial(), dial()
+	defer c1.Close()
+	defer c2.Close()
+	first := <-accepted
+	select {
+	case <-accepted:
+		t.Fatal("second connection accepted beyond the limit")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	select {
+	case second := <-accepted:
+		_ = second.Close()
+	case <-time.After(5 * time.Second):
+		t.Fatal("slot was not released")
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case _, ok := <-accepted:
+		if ok {
+			t.Fatal("accept after close")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("accept did not stop after close")
 	}
 }

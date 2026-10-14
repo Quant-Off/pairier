@@ -110,22 +110,30 @@ func (n *Node) TLSPublicKey() []byte {
 	return n.tls.Leaf.RawSubjectPublicKeyInfo
 }
 
-func (n *Node) MemberByTLSKey(ctx context.Context, spki []byte) (*exchange.Card, error) {
-	if len(spki) == 0 {
+func (n *Node) MemberByTLS(ctx context.Context, memberID string, spki []byte) (*exchange.Card, error) {
+	if len(spki) == 0 || !store.ValidMemberID(memberID) || memberID == n.info.MemberID {
 		return nil, ErrUnknownMember
 	}
-	members, err := n.Members()
+	rec, err := n.st.GetMember(memberID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBadID) {
+			return nil, ErrUnknownMember
+		}
+		return nil, err
+	}
+	claimed, err := exchange.DecodeCard(rec.Card)
 	if err != nil {
 		return nil, err
 	}
-	for _, m := range members {
-		card, err := n.Member(ctx, m.MemberID)
-		if err != nil {
-			return nil, err
-		}
-		if bytes.Equal(card.TLSPublicKey, spki) {
-			return card, nil
-		}
+	if claimed.MemberID != memberID || !bytes.Equal(claimed.TLSPublicKey, spki) {
+		return nil, ErrUnknownMember
 	}
-	return nil, ErrUnknownMember
+	card, err := n.Member(ctx, memberID)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(card.TLSPublicKey, spki) {
+		return nil, ErrUnknownMember
+	}
+	return card, nil
 }
