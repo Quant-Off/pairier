@@ -371,10 +371,11 @@ func (m *KeyInspectRequest) Decode(r *Reader) (err error) {
 }
 
 type KeyInspectResponse struct {
-	Alg   uint16
-	Usage uint32
-	KeyID [KeyIDLen]byte
-	Label string
+	Alg       uint16
+	Usage     uint32
+	KeyID     [KeyIDLen]byte
+	Label     string
+	PublicKey []byte
 }
 
 func (*KeyInspectResponse) Op() Op { return OpKeyInspect }
@@ -384,6 +385,7 @@ func (m *KeyInspectResponse) Encode(w *Writer) {
 	w.U32(m.Usage)
 	w.Bytes(m.KeyID[:])
 	w.String(m.Label)
+	w.Bytes(m.PublicKey)
 }
 
 func (m *KeyInspectResponse) Decode(r *Reader) (err error) {
@@ -398,7 +400,10 @@ func (m *KeyInspectResponse) Decode(r *Reader) (err error) {
 		return err
 	}
 	copy(m.KeyID[:], id)
-	m.Label, err = r.String(MaxLabel)
+	if m.Label, err = r.String(MaxLabel); err != nil {
+		return err
+	}
+	m.PublicKey, err = r.Bytes(MaxPublicKey)
 	return err
 }
 

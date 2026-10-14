@@ -62,6 +62,41 @@ pub(crate) fn generate(alg: Alg) -> Result<Generated, Error> {
     }
 }
 
+pub(crate) fn public_key(alg: Alg, pkcs8: &[u8]) -> Result<Vec<u8>, Error> {
+    match alg {
+        Alg::EcdsaP256Sha256 | Alg::EcdsaP384Sha384 => {
+            let sa = if alg == Alg::EcdsaP256Sha256 {
+                &ECDSA_P256_SHA256_FIXED_SIGNING
+            } else {
+                &ECDSA_P384_SHA384_FIXED_SIGNING
+            };
+            let kp = EcdsaKeyPair::from_pkcs8(sa, pkcs8).map_err(|_| Error::InvalidKeyBlob)?;
+            Ok(kp.public_key().as_ref().to_vec())
+        }
+        Alg::Ed25519 => {
+            let kp = Ed25519KeyPair::from_pkcs8(pkcs8).map_err(|_| Error::InvalidKeyBlob)?;
+            Ok(kp.public_key().as_ref().to_vec())
+        }
+        #[cfg(feature = "pqc")]
+        Alg::MlDsa65 | Alg::MlDsa87 => {
+            let sa = if alg == Alg::MlDsa65 {
+                &ML_DSA_65_SIGNING
+            } else {
+                &ML_DSA_87_SIGNING
+            };
+            let kp = PqdsaKeyPair::from_pkcs8(sa, pkcs8).map_err(|_| Error::InvalidKeyBlob)?;
+            Ok(kp.public_key().as_ref().to_vec())
+        }
+        #[cfg(not(feature = "pqc"))]
+        Alg::MlDsa65 | Alg::MlDsa87 => Err(Error::CapabilityDisabled),
+        Alg::Aes256Gcm
+        | Alg::DhkemP256
+        | Alg::MlKem768
+        | Alg::MlKem1024
+        | Alg::HybridP256MlKem768 => Err(Error::InvalidArgument),
+    }
+}
+
 pub(crate) fn sign(alg: Alg, pkcs8: &[u8], message: &[u8]) -> Result<Vec<u8>, Error> {
     match alg {
         Alg::EcdsaP256Sha256 | Alg::EcdsaP384Sha384 => {

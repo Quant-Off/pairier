@@ -27,6 +27,12 @@ const ML_KEM_768_CIPHERTEXT_LEN: usize = 1088;
 const ML_KEM_768_EK_OFFSET: usize = 1152;
 #[cfg(feature = "pqc")]
 const ML_KEM_768_EK_END: usize = ML_KEM_768_EK_OFFSET + ML_KEM_768_PUBLIC_LEN;
+#[cfg(feature = "pqc")]
+const ML_KEM_1024_SECRET_LEN: usize = 3168;
+#[cfg(feature = "pqc")]
+const ML_KEM_1024_EK_OFFSET: usize = 1536;
+#[cfg(feature = "pqc")]
+const ML_KEM_1024_EK_END: usize = ML_KEM_1024_EK_OFFSET + 1568;
 
 pub(crate) type Secret = Zeroizing<Vec<u8>>;
 pub(crate) type Generated = (Secret, Vec<u8>);
@@ -41,6 +47,49 @@ pub(crate) fn generate(alg: Alg) -> Result<Generated, Error> {
         Alg::MlKem1024 => mlkem_generate(&ML_KEM_1024),
         #[cfg(feature = "pqc")]
         Alg::HybridP256MlKem768 => hybrid_generate(),
+        #[cfg(not(feature = "pqc"))]
+        Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 => Err(Error::CapabilityDisabled),
+        Alg::Aes256Gcm
+        | Alg::EcdsaP256Sha256
+        | Alg::EcdsaP384Sha384
+        | Alg::Ed25519
+        | Alg::MlDsa65
+        | Alg::MlDsa87 => Err(Error::InvalidArgument),
+    }
+}
+
+pub(crate) fn public_key(alg: Alg, secret: &[u8]) -> Result<Vec<u8>, Error> {
+    match alg {
+        Alg::DhkemP256 => {
+            let sk = PrivateKey::from_private_key(&ECDH_P256, secret)
+                .map_err(|_| Error::InvalidKeyBlob)?;
+            p256_public(&sk)
+        }
+        #[cfg(feature = "pqc")]
+        Alg::MlKem768 => {
+            DecapsulationKey::new(&ML_KEM_768, secret).map_err(|_| Error::InvalidKeyBlob)?;
+            Ok(mlkem768_public(secret)?.to_vec())
+        }
+        #[cfg(feature = "pqc")]
+        Alg::MlKem1024 => {
+            DecapsulationKey::new(&ML_KEM_1024, secret).map_err(|_| Error::InvalidKeyBlob)?;
+            if secret.len() != ML_KEM_1024_SECRET_LEN {
+                return Err(Error::InvalidKeyBlob);
+            }
+            secret
+                .get(ML_KEM_1024_EK_OFFSET..ML_KEM_1024_EK_END)
+                .map(<[u8]>::to_vec)
+                .ok_or(Error::InvalidKeyBlob)
+        }
+        #[cfg(feature = "pqc")]
+        Alg::HybridP256MlKem768 => {
+            let (dh_sk, ml_sk) = secret
+                .split_at_checked(P256_SECRET_LEN)
+                .ok_or(Error::InvalidKeyBlob)?;
+            let mut out = public_key(Alg::DhkemP256, dh_sk)?;
+            out.extend_from_slice(&public_key(Alg::MlKem768, ml_sk)?);
+            Ok(out)
+        }
         #[cfg(not(feature = "pqc"))]
         Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 => Err(Error::CapabilityDisabled),
         Alg::Aes256Gcm

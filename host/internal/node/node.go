@@ -239,7 +239,8 @@ func (n *Node) Key(ctx context.Context, id string) (*store.KeyRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	if store.KeyIDString(info.KeyID) != rec.KeyID || info.Alg != rec.Alg || info.Usage != rec.Usage || info.Label != rec.Label {
+	if store.KeyIDString(info.KeyID) != rec.KeyID || info.Alg != rec.Alg || info.Usage != rec.Usage || info.Label != rec.Label ||
+		!bytes.Equal(info.PublicKey, rec.PublicKey) {
 		return nil, ErrMetadata
 	}
 	return rec, nil

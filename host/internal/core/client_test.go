@@ -403,8 +403,12 @@ func TestRealCoreExchange(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := a.Inspect(ctx, k.Blob)
-	if err != nil || info.KeyID != k.KeyID || info.Label != "a/shared" || info.Alg != wire.AlgAES256GCM {
+	if err != nil || info.KeyID != k.KeyID || info.Label != "a/shared" || info.Alg != wire.AlgAES256GCM || len(info.PublicKey) != 0 {
 		t.Fatalf("inspect: %+v %v", info, err)
+	}
+	kinfo, err := b.Inspect(ctx, kem.Blob)
+	if err != nil || !bytes.Equal(kinfo.PublicKey, kem.PublicKey) {
+		t.Fatalf("kem inspect: %v", err)
 	}
 	_, err = b.Inspect(ctx, k.Blob)
 	var se *StatusError

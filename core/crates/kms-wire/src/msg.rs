@@ -408,6 +408,7 @@ pub struct KeyInspectResponse<'a> {
     pub usage: u32,
     pub key_id: [u8; KEY_ID_LEN],
     pub label: &'a str,
+    pub public_key: &'a [u8],
 }
 
 impl<'a> Message<'a> for KeyInspectResponse<'a> {
@@ -417,7 +418,8 @@ impl<'a> Message<'a> for KeyInspectResponse<'a> {
         w.write_u16(self.alg)?;
         w.write_u32(self.usage)?;
         w.write_bytes(&self.key_id)?;
-        w.write_str(self.label)
+        w.write_str(self.label)?;
+        w.write_bytes(self.public_key)
     }
 
     fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
@@ -426,6 +428,7 @@ impl<'a> Message<'a> for KeyInspectResponse<'a> {
             usage: r.read_u32()?,
             key_id: r.read_array::<KEY_ID_LEN>()?,
             label: r.read_str(MAX_LABEL)?,
+            public_key: r.read_bytes(MAX_PUBLIC_KEY)?,
         })
     }
 }

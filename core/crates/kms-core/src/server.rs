@@ -173,6 +173,7 @@ impl Server {
             usage: info.usage.bits(),
             key_id: info.key_id,
             label: &info.label,
+            public_key: &info.public_key,
         })
     }
 
@@ -567,6 +568,20 @@ mod tests {
         assert_eq!(info.usage, usage::ENCRYPT | usage::DECRYPT | usage::EXPORT);
         assert_eq!(info.key_id, key_id);
         assert_eq!(info.label, "a/shared");
+        assert!(info.public_key.is_empty());
+        let (h, body) = call(
+            &mut b,
+            9,
+            &KeyInspectRequest {
+                key_blob: &kem_blob,
+            },
+        )
+        .unwrap();
+        assert_eq!(h.status, Status::Ok);
+        assert_eq!(
+            KeyInspectResponse::decode_body(&body).unwrap().public_key,
+            kem_pk.as_slice()
+        );
         let (h, _) = call(&mut b, 3, &KeyInspectRequest { key_blob: &blob }).unwrap();
         assert_eq!(h.status, Status::InvalidKeyBlob);
 

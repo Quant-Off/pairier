@@ -40,6 +40,7 @@ pub struct KeyInfo {
     pub usage: Usage,
     pub key_id: [u8; KEY_ID_LEN],
     pub label: String,
+    pub public_key: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,11 +128,18 @@ impl Engine {
 
     pub fn inspect(&self, blob: &[u8]) -> Result<KeyInfo, Error> {
         let k = blob::open(&self.root, blob)?;
+        self.check_enabled(k.alg)?;
+        let public_key = match k.alg.kind() {
+            AlgKind::Symmetric => Vec::new(),
+            AlgKind::Signature => sign::public_key(k.alg, &k.secret)?,
+            AlgKind::Kem => kem::public_key(k.alg, &k.secret)?,
+        };
         Ok(KeyInfo {
             alg: k.alg,
             usage: k.usage,
             key_id: k.key_id,
             label: k.label,
+            public_key,
         })
     }
 
@@ -325,6 +333,7 @@ mod tests {
         assert!(k.public_key.is_empty());
         let info = e.inspect(&k.blob).unwrap();
         assert_eq!(info.alg, Alg::Aes256Gcm);
+        assert!(info.public_key.is_empty());
         assert_eq!(info.usage, both);
         assert_eq!(info.key_id, k.key_id);
         assert_eq!(info.label, "tenant/db");
@@ -408,6 +417,7 @@ mod tests {
         let u = Usage::from_bits(usage::SIGN | usage::VERIFY).unwrap();
         let k = e.generate_key(alg, u, "signer").unwrap();
         assert_eq!(k.public_key.len(), alg.public_key_len().unwrap());
+        assert_eq!(e.inspect(&k.blob).unwrap().public_key, k.public_key);
         let sig = e.sign(&k.blob, b"message").unwrap();
         assert_eq!(sig.len(), alg.signature_len().unwrap());
         assert!(e.verify(alg, &k.public_key, b"message", &sig).unwrap());
@@ -445,6 +455,7 @@ mod tests {
         let u = Usage::from_bits(usage::DECAPSULATE).unwrap();
         let k = e.generate_key(alg, u, "kem").unwrap();
         assert_eq!(k.public_key.len(), alg.public_key_len().unwrap());
+        assert_eq!(e.inspect(&k.blob).unwrap().public_key, k.public_key);
         let (ct, ss1) = e.encapsulate(alg, &k.public_key).unwrap();
         assert_eq!(ct.len(), alg.kem_ciphertext_len().unwrap());
         let ss2 = e

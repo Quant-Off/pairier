@@ -37,10 +37,11 @@ type GeneratedKey struct {
 }
 
 type KeyInfo struct {
-	Alg   uint16
-	Usage uint32
-	KeyID [wire.KeyIDLen]byte
-	Label string
+	Alg       uint16
+	Usage     uint32
+	KeyID     [wire.KeyIDLen]byte
+	Label     string
+	PublicKey []byte
 }
 
 type ImportedKey struct {
@@ -152,7 +153,7 @@ func (c *Client) Inspect(ctx context.Context, blob []byte) (*KeyInfo, error) {
 	if err := c.call(ctx, &wire.KeyInspectRequest{KeyBlob: blob}, &rsp); err != nil {
 		return nil, err
 	}
-	return &KeyInfo{Alg: rsp.Alg, Usage: rsp.Usage, KeyID: rsp.KeyID, Label: rsp.Label}, nil
+	return &KeyInfo{Alg: rsp.Alg, Usage: rsp.Usage, KeyID: rsp.KeyID, Label: rsp.Label, PublicKey: rsp.PublicKey}, nil
 }
 
 func (c *Client) ExportKey(ctx context.Context, blob []byte, kemAlg uint16, recipientPublicKey []byte, usage uint32, context []byte) ([]byte, error) {

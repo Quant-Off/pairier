@@ -219,6 +219,26 @@ func TestStoredMetadataIsVerifiedAgainstCore(t *testing.T) {
 	if _, err := alice.Key(ctx, k.KeyID); !errors.Is(err, ErrMetadata) {
 		t.Fatalf("metadata tamper not detected: %v", err)
 	}
+	kemPath := filepath.Join(o.Dir, "keys", alice.info.KemKeyID+".json")
+	kraw, err := os.ReadFile(kemPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var krec store.KeyRecord
+	if err := json.Unmarshal(kraw, &krec); err != nil {
+		t.Fatal(err)
+	}
+	krec.PublicKey[len(krec.PublicKey)-1] ^= 1
+	kedit, _ := json.Marshal(&krec)
+	if err := os.WriteFile(kemPath, kedit, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.Key(ctx, krec.KeyID); !errors.Is(err, ErrMetadata) {
+		t.Fatalf("swapped kem public key not detected: %v", err)
+	}
+	if _, err := Open(ctx, o); err == nil {
+		t.Fatal("node opened with a swapped kem public key")
+	}
 	if _, err := alice.Encrypt(ctx, k.KeyID, []byte("x"), nil); !errors.Is(err, ErrMetadata) {
 		t.Fatalf("tampered key usable: %v", err)
 	}
