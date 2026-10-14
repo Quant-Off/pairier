@@ -23,9 +23,9 @@ def host_triple():
 
 
 def cargo_components(cargo, flags):
-    meta = json.loads(run([cargo, "metadata", "--frozen", "--format-version", "1",
-                           "--manifest-path", "core/crates/kms-core/Cargo.toml",
-                           "--filter-platform", host_triple(), *flags]))
+    meta = json.loads(run([cargo, "metadata", "--frozen", "--offline", "--format-version", "1",
+                           "--manifest-path", "crates/kms-core/Cargo.toml",
+                           "--filter-platform", host_triple(), *flags], cwd="core"))
     lock = tomllib.loads(pathlib.Path("core/Cargo.lock").read_text())
     checksums = {(p["name"], p["version"]): p.get("checksum") for p in lock["package"]}
     packages = {p["id"]: p for p in meta["packages"]}
