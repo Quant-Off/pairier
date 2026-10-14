@@ -37,22 +37,6 @@ The following features are also included.
 - Strict protocol: fixed 16-byte header, length-prefixed fields, 1 MiB body limit, and rejection of trailing bytes. `HELLO` must come first, and any framing violation terminates the session.
 - Air-gapped build: Rust dependencies are vendored in `core/vendor` and built with `--frozen`. Go builds with `GOPROXY=off` and `-mod=vendor` and has no external dependencies.
 
-## Build
+## Build and run
 
-Requirements are Rust `1.95.0` (pinned by `rust-toolchain.toml`) and Go `1.27.2`. A FIPS build additionally needs `cmake` and `perl`, and is statically linked only on Linux x86_64/aarch64.
-
-```bash
-$ make build # core (release, with pqc) + host
-$ make build-core FIPS=1
-$ make test # Rust tests with all features + Go tests (using the real core binary)
-$ make lint
-```
-
-## Running the core
-
-```bash
-$ kms-core --generate-root-key /path/root.key
-$ kms-core --socket /run/kms/core.sock --root-key-file /path/root.key --pqc
-```
-
-When the host launches the core directly, it uses the inherited socket via `--fd 3`. On platforms without `mlockall`, such as macOS, `--allow-unlocked-memory` is required.
+For details, see [USAGE.md](USAGE.md).

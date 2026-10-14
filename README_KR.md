@@ -37,22 +37,6 @@
 - 엄격한 프로토콜: 고정 16바이트 헤더와 길이 접두 필드, 1MiB 본문 상한, 후행 바이트를 거부합니다. `HELLO` 선행을 강제하며 프레이밍(framing) 위반 시 세션을 끊어냅니다.
 - 폐쇄 빌드: Rust 의존성은 `core/vendor`에 벤더링되고 `--frozen`으로 빌드합니다. Go는 `GOPROXY=off`, `-mod=vendor`로 빌드하며 외부 의존성이 없습니다.
 
-## 빌드
+## 빌드 및 실행
 
-요구 사항은 Rust `1.95.0`(`rust-toolchain.toml`로 고정)과 Go `1.27.2`입니다. FIPS 빌드는 `cmake`, `perl`이 추가로 필요하며 Linux x86_64/aarch64에서만 정적 링크됩니다.
-
-```bash
-$ make build # 코어(release, pqc 포함) + 호스트
-$ make build-core FIPS=1
-$ make test # Rust 전체 feature 테스트 + Go 테스트(실제 코어 바이너리 사용)
-$ make lint
-```
-
-## 코어 실행
-
-```bash
-$ kms-core --generate-root-key /path/root.key
-$ kms-core --socket /run/kms/core.sock --root-key-file /path/root.key --pqc
-```
-
-호스트가 직접 기동할 때는 `--fd 3`으로 상속 소켓을 사용합니다. macOS처럼 `mlockall`이 없는 환경에서는 `--allow-unlocked-memory`가 필요합니다.
+이 내용에 관해서는 [USAGE.md](USAGE_KR.md)를 확인할 수 있습니다.
