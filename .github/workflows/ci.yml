@@ -117,11 +117,7 @@ jobs:
       - name: cargo deny
         run: |
           cargo install cargo-deny --version 0.19.8 --locked
-          cd core && cargo deny check licenses bans sources
-      - name: cargo audit
-        run: |
-          cargo install cargo-audit --version 0.22.2 --locked
-          cd core && cargo audit
+          cd core && cargo deny check advisories licenses bans sources
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: host/go.mod

@@ -79,8 +79,7 @@ dist: build
 	./scripts/dist.sh $(VERSION) $(CORE_RELEASE) $(HOST_DIR)/bin/kmsd $(HOST_DIR)/bin/kmsctl $(DIST_DIR)
 
 audit:
-	cd $(CORE_DIR) && $(CARGO) deny check licenses bans sources
-	cd $(CORE_DIR) && if [ -d "$$HOME/.cargo/advisory-db" ]; then $(CARGO) audit --no-fetch; else echo "advisory db missing, run: cargo audit fetch (online) or copy ~/.cargo/advisory-db"; fi
+	cd $(CORE_DIR) && $(CARGO) deny check --disable-fetch advisories licenses bans sources
 	@command -v govulncheck >/dev/null && (cd $(HOST_DIR) && govulncheck ./...) || echo "govulncheck not installed, skipping"
 
 clean:
