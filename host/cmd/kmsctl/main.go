@@ -71,23 +71,32 @@ var algNames = map[uint16]string{
 }
 
 type cli struct {
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
-	opts   node.Options
+	stdin         io.Reader
+	stdout        io.Writer
+	stderr        io.Writer
+	dir           string
+	core          string
+	allowUnlocked bool
+	timeout       time.Duration
 }
+
+var errNoDir = errors.New("--dir or $KMS_DIR is required")
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("kmsctl", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	dir := fs.String("dir", os.Getenv("KMS_DIR"), "node directory (default $KMS_DIR)")
-	corePath := fs.String("core", os.Getenv("KMS_CORE"), "kms-core binary (default $KMS_CORE or next to kmsctl)")
-	allowUnlocked := fs.Bool("allow-unlocked-memory", runtime.GOOS == "darwin", "run the core without locked memory")
-	timeout := fs.Duration("timeout", 10*time.Second, "core call timeout")
+	c := &cli{
+		stdin:         stdin,
+		stdout:        stdout,
+		stderr:        stderr,
+		dir:           os.Getenv("KMS_DIR"),
+		core:          os.Getenv("KMS_CORE"),
+		allowUnlocked: runtime.GOOS == "darwin",
+		timeout:       10 * time.Second,
+	}
+	fs := c.flags("kmsctl")
 	fs.Usage = func() { fmt.Fprint(stderr, usageText) }
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -101,25 +110,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "kmsctl %s (go %s, go_fips=%v)\n", version, runtime.Version(), fips140.Enabled())
 		return 0
 	}
-	if *dir == "" {
-		fmt.Fprintln(stderr, "kmsctl: --dir or $KMS_DIR is required")
-		return 2
-	}
-	if *corePath == "" {
-		if exe, err := os.Executable(); err == nil {
-			*corePath = filepath.Join(filepath.Dir(exe), "kms-core")
-		}
-	}
-	c := &cli{stdin: stdin, stdout: stdout, stderr: stderr, opts: node.Options{
-		Dir:                 *dir,
-		CoreBinary:          *corePath,
-		AllowUnlockedMemory: *allowUnlocked,
-		Timeout:             *timeout,
-		Stderr:              stderr,
-	}}
 	code, err := c.dispatch(rest)
 	if err != nil {
 		fmt.Fprintf(stderr, "kmsctl: %v\n", err)
+		if errors.Is(err, errNoDir) {
+			code = 2
+		}
 		if code == 0 {
 			code = 1
 		}
@@ -199,11 +195,38 @@ func (c *cli) dispatch(args []string) (int, error) {
 func (c *cli) flags(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(c.stderr)
+	fs.StringVar(&c.dir, "dir", c.dir, "node directory (default $KMS_DIR)")
+	fs.StringVar(&c.core, "core", c.core, "kms-core binary (default $KMS_CORE or next to kmsctl)")
+	fs.BoolVar(&c.allowUnlocked, "allow-unlocked-memory", c.allowUnlocked, "run the core without locked memory")
+	fs.DurationVar(&c.timeout, "timeout", c.timeout, "core call timeout")
 	return fs
 }
 
+func (c *cli) options() (node.Options, error) {
+	if c.dir == "" {
+		return node.Options{}, errNoDir
+	}
+	core := c.core
+	if core == "" {
+		if exe, err := os.Executable(); err == nil {
+			core = filepath.Join(filepath.Dir(exe), "kms-core")
+		}
+	}
+	return node.Options{
+		Dir:                 c.dir,
+		CoreBinary:          core,
+		AllowUnlockedMemory: c.allowUnlocked,
+		Timeout:             c.timeout,
+		Stderr:              c.stderr,
+	}, nil
+}
+
 func (c *cli) open(ctx context.Context) (*node.Node, error) {
-	return node.Open(ctx, c.opts)
+	opts, err := c.options()
+	if err != nil {
+		return nil, err
+	}
+	return node.Open(ctx, opts)
 }
 
 func (c *cli) cmdInit(ctx context.Context, args []string) (int, error) {
@@ -216,7 +239,11 @@ func (c *cli) cmdInit(ctx context.Context, args []string) (int, error) {
 	if *id == "" {
 		return 2, errors.New("init: --id is required")
 	}
-	n, err := node.Init(ctx, c.opts, *id, *pqc)
+	opts, err := c.options()
+	if err != nil {
+		return 2, err
+	}
+	n, err := node.Init(ctx, opts, *id, *pqc)
 	if err != nil {
 		return 1, err
 	}
@@ -285,7 +312,8 @@ func (c *cli) cmdMemberAdd(ctx context.Context, args []string) (int, error) {
 }
 
 func (c *cli) cmdMemberList(ctx context.Context, args []string) (int, error) {
-	if len(args) != 0 {
+	fs := c.flags("member list")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 2, errors.New("member list: no arguments expected")
 	}
 	n, err := c.open(ctx)
@@ -332,7 +360,8 @@ func (c *cli) cmdKeyGen(ctx context.Context, args []string) (int, error) {
 }
 
 func (c *cli) cmdKeyList(ctx context.Context, args []string) (int, error) {
-	if len(args) != 0 {
+	fs := c.flags("key list")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 2, errors.New("key list: no arguments expected")
 	}
 	n, err := c.open(ctx)
@@ -468,7 +497,8 @@ func (c *cli) cmdKeyPush(ctx context.Context, args []string) (int, error) {
 }
 
 func (c *cli) cmdInboxList(ctx context.Context, args []string) (int, error) {
-	if len(args) != 0 {
+	fs := c.flags("inbox list")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 2, errors.New("inbox list: no arguments expected")
 	}
 	n, err := c.open(ctx)
@@ -546,7 +576,8 @@ func (c *cli) cmdPeerHealth(ctx context.Context, args []string) (int, error) {
 }
 
 func (c *cli) cmdAuditVerify(ctx context.Context, args []string) (int, error) {
-	if len(args) != 0 {
+	fs := c.flags("audit verify")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 2, errors.New("audit verify: no arguments expected")
 	}
 	n, err := c.open(ctx)

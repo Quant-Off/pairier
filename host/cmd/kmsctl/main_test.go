@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type syncBuffer struct {
@@ -50,6 +52,65 @@ func TestUsageAndVersion(t *testing.T) {
 	out.Reset()
 	if code := run([]string{"key", "list"}, nil, &out, &errb); code != 2 {
 		t.Fatalf("missing dir should be a usage error, got %d", code)
+	}
+}
+
+func TestGlobalFlagsAfterCommand(t *testing.T) {
+	t.Setenv("KMS_DIR", "")
+	t.Setenv("KMS_CORE", "")
+	missing := filepath.Join(t.TempDir(), "kms-core")
+	globals := []string{"--core", missing, "--allow-unlocked-memory", "--timeout", "1s"}
+	for _, cmd := range [][]string{
+		{"init", "--id", "alice"},
+		{"card"},
+		{"member", "list"},
+		{"key", "gen", "--label", "x"},
+		{"key", "list"},
+		{"key", "info", "--id", "k"},
+		{"inbox", "list"},
+		{"inbox", "accept", "--id", "e"},
+		{"inbox", "reject", "--id", "e"},
+		{"peer", "health", "--member", "bob", "--url", "https://127.0.0.1:1"},
+		{"audit", "verify"},
+	} {
+		var out, errb bytes.Buffer
+		code := run(append(append([]string{}, cmd...), globals...), nil, &out, &errb)
+		if code != 2 || !strings.Contains(errb.String(), errNoDir.Error()) {
+			t.Fatalf("%v: %d %q", cmd, code, errb.String())
+		}
+	}
+	dir := filepath.Join(t.TempDir(), "node")
+	var out, errb bytes.Buffer
+	code := run([]string{"init", "--id", "alice", "--dir", dir, "--core", missing}, nil, &out, &errb)
+	if code != 1 || !strings.Contains(errb.String(), missing) {
+		t.Fatalf("init ignored --core: %d %q", code, errb.String())
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("node dir created with a missing core: %v", err)
+	}
+}
+
+func TestGlobalFlagsKeepTopLevelValues(t *testing.T) {
+	c := &cli{stderr: io.Discard, allowUnlocked: true, timeout: time.Second}
+	top := c.flags("kmsctl")
+	if err := top.Parse([]string{"--allow-unlocked-memory=false", "--core", "/a", "init", "--id", "x"}); err != nil {
+		t.Fatal(err)
+	}
+	sub := c.flags("init")
+	sub.String("id", "", "")
+	if err := sub.Parse(top.Args()[1:]); err != nil {
+		t.Fatal(err)
+	}
+	if c.allowUnlocked || c.core != "/a" || c.timeout != time.Second {
+		t.Fatalf("top level values reset: %v %q %v", c.allowUnlocked, c.core, c.timeout)
+	}
+	sub = c.flags("init")
+	sub.String("id", "", "")
+	if err := sub.Parse([]string{"--id", "x", "--core", "/b", "--dir", "/d", "--timeout", "3s"}); err != nil {
+		t.Fatal(err)
+	}
+	if c.allowUnlocked || c.core != "/b" || c.dir != "/d" || c.timeout != 3*time.Second {
+		t.Fatalf("command level values: %v %q %q %v", c.allowUnlocked, c.core, c.dir, c.timeout)
 	}
 }
 
@@ -133,5 +194,21 @@ func TestEndToEndExchange(t *testing.T) {
 	}
 	if out := must(nil, "--dir", bob, "audit", "verify"); !strings.HasPrefix(out, "verified\t") {
 		t.Fatalf("audit verify %q", out)
+	}
+	abs, err := filepath.Abs(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(wd, abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errb syncBuffer
+	if code := run([]string{"audit", "verify", "--dir", bob, "--core", rel, "--allow-unlocked-memory"}, nil, &out, &errb); code != 0 || !strings.HasPrefix(out.String(), "verified\t") {
+		t.Fatalf("global flags after command with relative core: %d %s%s", code, out.String(), errb.String())
 	}
 }
