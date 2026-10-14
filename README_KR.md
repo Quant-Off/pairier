@@ -18,7 +18,11 @@
 - `host/` Go 모듈 (호스트)
   - `internal/wire` 와이어 프로토콜 Go 구현
   - `internal/core` 코어 프로세스 기동과 클라이언트
-  - `cmd/kmsd`, `cmd/kmsctl` 데몬과 관리 도구 (API 계층은 구현 예정)
+  - `internal/store`, `internal/node` 노드 디렉토리와 키, 구성원, 봉투 관리
+  - `internal/exchange` 신원 카드와 키 교환 봉투 형식
+  - `internal/audit` 해시 체인 감사 로그
+  - `internal/auth`, `internal/api` 카드에 고정된 mTLS와 HTTP API
+  - `cmd/kmsd`, `cmd/kmsctl` 데몬과 관리 도구
 - `conformance/wire/` Rust와 Go가 함께 통과해야 하는 프로토콜 적합성 벡터
 
 ## 기능

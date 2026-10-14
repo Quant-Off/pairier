@@ -113,7 +113,7 @@ alice$ kmsctl --dir ~/.pairier key gen --label project/db
 af8477cc1076f219bfb047d846629eb8  aes-256-gcm  encrypt,decrypt,export  project/db
 ```
 
-생성되는 키는 AES-256-GCM 대칭 키입니다. `--usage` 플래그를 생략하면 기본 갑으로 `encrypt,decrypt,export`가 적용됩니다. 다른 구성원에게 보낼 키에는 반드시 `export`가 포함되어 있어야 합니다.
+생성되는 키는 AES-256-GCM 대칭 키입니다. `--usage` 플래그를 생략하면 기본값으로 `encrypt,decrypt,export`가 적용됩니다. 다른 구성원에게 보낼 키에는 반드시 `export`가 포함되어 있어야 합니다.
 
 ### 5-a. 오프라인 전달 (파일)
 
@@ -180,7 +180,7 @@ verified  13  entries
 | `--allow-unlocked-memory` | macOS `true`, 그 외 `false`             | 메모리 잠금 없이 코어 실행 |
 | `--timeout DUR`           | `10s`                                 | 코어 호출 제한 시간     |
 
-전역 옵션은 명령보다 앞에 두어야 합니다. 예를 들어 `kmsctl --dir X key list`처럼 사용할 수 있습니다.
+전역 옵션은 명령 앞/뒤 어디에 두어도 됩니다. `kmsctl --dir X key list`와 `kmsctl key list --dir X`는 같으며, 양쪽에 모두 설정하면 명령 뒤의 값이 적용됩니다.
 
 ### 명령
 
@@ -226,15 +226,15 @@ verified  13  entries
 
 ### 플래그와 설정 파일
 
-| 플래그                       | 설정 파일 필드                | 기본값                       |
-|---------------------------|-------------------------|---------------------------|
-| `--dir`                   | `dir`                   | 없음 (필수)                   |
-| `--core`                  | `core`                  | kmsd 옆의 `kms-core`        |
-| `--listen`                | `listen`                | `127.0.0.1:7443`          |
-| `--allow-unlocked-memory` | `allow_unlocked_memory` | macOS `true`, 그 외 `false` |
-| `--timeout`               | `timeout`               | `10s`                     |
-| `--config FILE`           |                         |                           |
-| `--version`               |                         |                           |
+| 플래그                       | 설정 파일 필드                | 기본값                                   |
+|---------------------------|-------------------------|---------------------------------------|
+| `--dir`                   | `dir`                   | `$KMS_DIR`, 없는 경우 필수                  |
+| `--core`                  | `core`                  | `$KMS_CORE`, 없는 경우 kmsd 옆의 `kms-core` |
+| `--listen`                | `listen`                | `127.0.0.1:7443`                      |
+| `--allow-unlocked-memory` | `allow_unlocked_memory` | macOS `true`, 그 외 `false`             |
+| `--timeout`               | `timeout`               | `10s`                                 |
+| `--config FILE`           |                         |                                       |
+| `--version`               |                         |                                       |
 
 ```json
 {
@@ -246,7 +246,7 @@ verified  13  entries
 }
 ```
 
-- 우선순위는 명시한 플래그 -> 설정 파일 -> 기본값 순입니다.
+- 우선순위는 명시한 플래그 -> 설정 파일 -> 환경 변수 -> 기본값 순입니다.
 - 설정 파일은 일반 파일이어야 하며, 그룹 또는 다른 사용자가 사용할 수 없어야 합니다. 알 수 없는 필드가 있다면 기동하지 않습니다.
 - `listen`의 호스트는 IP 주소만 허용합니다.
 - `kmsd`는 `kmsctl init`으로 이미 초기화한 노드만 엽니다.
@@ -331,7 +331,7 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 > [!CAUTION]
 > 현재 pairier는 릴리즈가 공개되지 않았으며, 그 이전에 개발이 완료되더라도 기능의 안전성 검증을 위해 시간이 소요될 수 있습니다. pairier는 개발 또는 연구용으로만 사용해주시길 바랍니다.
 >
-> **위 항목들은 안정된 릴리즈가 출시되지 전까지는 형식상 존재합니다. 검증이 진행됨에 따라 필요한 보안 요구사항이 충분히 증가될 수 있습니다.**
+> **위 항목들은 안정된 릴리즈가 출시되기 전까지는 형식상 존재합니다. 검증이 진행됨에 따라 필요한 보안 요구사항이 충분히 증가될 수 있습니다.**
 
 ## 한도
 

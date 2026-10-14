@@ -180,7 +180,7 @@ verified  13  entries
 | `--allow-unlocked-memory` | `true` on macOS, `false` elsewhere               | Run the core without locked memory |
 | `--timeout DUR`           | `10s`                                            | Core call timeout                  |
 
-Global options must come before the command, for example `kmsctl --dir X key list`.
+Global options may appear before or after the command. `kmsctl --dir X key list` and `kmsctl key list --dir X` are equivalent, and when both are given the value after the command wins.
 
 ### Commands
 
@@ -226,15 +226,15 @@ If the file given with `--out` already exists, the command fails instead of over
 
 ### Flags and configuration file
 
-| Flag                      | Config field            | Default                            |
-|---------------------------|-------------------------|------------------------------------|
-| `--dir`                   | `dir`                   | None (required)                    |
-| `--core`                  | `core`                  | `kms-core` next to kmsd            |
-| `--listen`                | `listen`                | `127.0.0.1:7443`                   |
-| `--allow-unlocked-memory` | `allow_unlocked_memory` | `true` on macOS, `false` elsewhere |
-| `--timeout`               | `timeout`               | `10s`                              |
-| `--config FILE`           |                         |                                    |
-| `--version`               |                         |                                    |
+| Flag                      | Config field            | Default                                        |
+|---------------------------|-------------------------|------------------------------------------------|
+| `--dir`                   | `dir`                   | `$KMS_DIR`, otherwise required                 |
+| `--core`                  | `core`                  | `$KMS_CORE`, otherwise `kms-core` next to kmsd |
+| `--listen`                | `listen`                | `127.0.0.1:7443`                               |
+| `--allow-unlocked-memory` | `allow_unlocked_memory` | `true` on macOS, `false` elsewhere             |
+| `--timeout`               | `timeout`               | `10s`                                          |
+| `--config FILE`           |                         |                                                |
+| `--version`               |                         |                                                |
 
 ```json
 {
@@ -246,7 +246,7 @@ If the file given with `--out` already exists, the command fails instead of over
 }
 ```
 
-- Precedence is explicit flags -> configuration file -> defaults.
+- Precedence is explicit flags -> configuration file -> environment variables -> defaults.
 - The configuration file must be a regular file that the group and other users cannot access. kmsd refuses to start if the file contains unknown fields.
 - The `listen` host must be an IP address.
 - `kmsd` opens only nodes already initialized with `kmsctl init`.

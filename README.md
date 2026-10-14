@@ -18,7 +18,11 @@ A Zero-Trust hybrid Key Management System (KMS) built with Go and Rust. The Go h
 - `host/` Go module (host)
   - `internal/wire` Go implementation of the wire protocol
   - `internal/core` core process launcher and client
-  - `cmd/kmsd`, `cmd/kmsctl` daemon and management tool (API layer not yet implemented)
+  - `internal/store`, `internal/node` node directory and key, member and envelope management
+  - `internal/exchange` identity card and key exchange envelope formats
+  - `internal/audit` hash-chained audit log
+  - `internal/auth`, `internal/api` card-pinned mTLS and the HTTP API
+  - `cmd/kmsd`, `cmd/kmsctl` daemon and management tool
 - `conformance/wire/` protocol conformance vectors that both Rust and Go must pass
 
 ## Features
