@@ -151,6 +151,14 @@ func Init(ctx context.Context, o Options, memberID string, pqc bool) (*Node, err
 	if err != nil {
 		return nil, err
 	}
+	n, err := buildNode(ctx, o, st, memberID, pqc)
+	if err != nil {
+		return nil, errors.Join(err, st.Discard())
+	}
+	return n, nil
+}
+
+func buildNode(ctx context.Context, o Options, st *store.Store, memberID string, pqc bool) (*Node, error) {
 	if err := generateRootKey(ctx, o, st.RootKeyPath()); err != nil {
 		return nil, err
 	}

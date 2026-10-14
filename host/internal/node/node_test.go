@@ -56,6 +56,35 @@ func TestInitChecksCoreBeforeCreatingDir(t *testing.T) {
 	}
 }
 
+func TestFailedInitLeavesNothingBehind(t *testing.T) {
+	base := t.TempDir()
+	existing := filepath.Join(base, "existing")
+	if err := os.Mkdir(existing, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Join(base, "fresh"), existing} {
+		o := opts(t, dir)
+		o.Timeout = time.Nanosecond
+		if _, err := Init(context.Background(), o, "alice", false); err == nil {
+			t.Fatal("init succeeded with an unusable core timeout")
+		}
+		entries, err := os.ReadDir(dir)
+		if dir == existing {
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("pre-existing dir not emptied: %v %d", err, len(entries))
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("created dir not removed: %v %d", err, len(entries))
+		}
+		o.Timeout = 5 * time.Second
+		n, err := Init(context.Background(), o, "alice", false)
+		if err != nil {
+			t.Fatalf("re-init after failure: %v", err)
+		}
+		_ = n.Close()
+	}
+}
+
 func TestRelativeCoreBinary(t *testing.T) {
 	o := opts(t, filepath.Join(t.TempDir(), "alice"))
 	abs, err := filepath.Abs(o.CoreBinary)

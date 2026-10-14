@@ -44,7 +44,8 @@ var (
 )
 
 type Store struct {
-	dir string
+	dir     string
+	created bool
 }
 
 type Origin struct {
@@ -98,8 +99,10 @@ type InboxRecord struct {
 }
 
 func Init(dir string) (*Store, error) {
+	created := true
 	if err := os.Mkdir(dir, dirMode); err != nil {
 		if errors.Is(err, fs.ErrExist) {
+			created = false
 			entries, rerr := os.ReadDir(dir)
 			if rerr != nil || len(entries) != 0 {
 				return nil, fmt.Errorf("%w: %s is not empty", ErrExists, dir)
@@ -119,7 +122,52 @@ func Init(dir string) (*Store, error) {
 	if err := syncDir(dir); err != nil {
 		return nil, err
 	}
-	return Open(dir)
+	st, err := Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	st.created = created
+	return st, nil
+}
+
+func (s *Store) Discard() error {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range entries {
+		path := filepath.Join(s.dir, e.Name())
+		if e.Name() == rootFile {
+			errs = append(errs, wipeFile(path))
+		}
+		errs = append(errs, os.RemoveAll(path))
+	}
+	if s.created {
+		errs = append(errs, os.Remove(s.dir))
+	} else {
+		errs = append(errs, syncDir(s.dir))
+	}
+	return errors.Join(errs...)
+}
+
+func wipeFile(path string) error {
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() {
+		return err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Write(make([]byte, fi.Size())); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 func Open(dir string) (*Store, error) {
