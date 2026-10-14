@@ -38,6 +38,49 @@ func initNode(t *testing.T, id string, pqc bool) (*Node, Options) {
 	return n, o
 }
 
+func TestInitChecksCoreBeforeCreatingDir(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "node")
+	notExec := filepath.Join(base, "kms-core")
+	if err := os.WriteFile(notExec, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, bin := range []string{"", filepath.Join(base, "missing"), notExec, base} {
+		o := Options{Dir: dir, CoreBinary: bin, AllowUnlockedMemory: true, Timeout: time.Second}
+		if _, err := Init(context.Background(), o, "alice", false); err == nil {
+			t.Fatalf("core %q accepted", bin)
+		}
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("core %q: node dir created: %v", bin, err)
+		}
+	}
+}
+
+func TestRelativeCoreBinary(t *testing.T) {
+	o := opts(t, filepath.Join(t.TempDir(), "alice"))
+	abs, err := filepath.Abs(o.CoreBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.CoreBinary, err = filepath.Rel(wd, abs); err != nil {
+		t.Fatal(err)
+	}
+	n, err := Init(context.Background(), o, "alice", false)
+	if err != nil {
+		t.Fatalf("relative core %q: %v", o.CoreBinary, err)
+	}
+	_ = n.Close()
+	n, err = Open(context.Background(), o)
+	if err != nil {
+		t.Fatalf("relative core %q: %v", o.CoreBinary, err)
+	}
+	_ = n.Close()
+}
+
 func pair(t *testing.T, a, b *Node) {
 	t.Helper()
 	ctx := context.Background()

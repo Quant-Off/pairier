@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -119,12 +121,31 @@ func (o *Options) spawn(ctx context.Context, rootKey string, pqc bool) (*core.Cl
 	})
 }
 
+func (o *Options) resolveCore() error {
+	if o.CoreBinary == "" {
+		return errors.New("node: core binary path is required")
+	}
+	abs, err := filepath.Abs(o.CoreBinary)
+	if err != nil {
+		return fmt.Errorf("node: core binary: %w", err)
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Errorf("node: core binary: %w", err)
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("node: core binary %s is not an executable file", abs)
+	}
+	o.CoreBinary = abs
+	return nil
+}
+
 func Init(ctx context.Context, o Options, memberID string, pqc bool) (*Node, error) {
 	if !exchange.ValidMemberID(memberID) {
 		return nil, ErrBadMemberID
 	}
-	if o.CoreBinary == "" {
-		return nil, errors.New("node: core binary path is required")
+	if err := o.resolveCore(); err != nil {
+		return nil, err
 	}
 	st, err := store.Init(o.Dir)
 	if err != nil {
@@ -207,6 +228,9 @@ func (n *Node) createIdentity(ctx context.Context, memberID string, pqc bool) er
 }
 
 func Open(ctx context.Context, o Options) (*Node, error) {
+	if err := o.resolveCore(); err != nil {
+		return nil, err
+	}
 	st, err := store.Open(o.Dir)
 	if err != nil {
 		return nil, err
