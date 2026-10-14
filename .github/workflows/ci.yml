@@ -36,9 +36,12 @@ jobs:
       - name: lint
         run: make lint-core
       - name: test
-        run: make test-core
+        run: |
+          [ "$RUNNER_OS" != Linux ] || sudo prlimit --pid $$ --memlock=unlimited:unlimited
+          make test-core
       - name: feature matrix
         run: |
+          [ "$RUNNER_OS" != Linux ] || sudo prlimit --pid $$ --memlock=unlimited:unlimited
           cd core
           cargo test --frozen -p kms-engine
           cargo test --frozen -p kms-engine --features pqc
@@ -88,6 +91,7 @@ jobs:
         run: cd core && rustup show active-toolchain
       - name: fips engine tests
         run: |
+          sudo prlimit --pid $$ --memlock=unlimited:unlimited
           cd core
           cargo test --frozen --no-default-features --features fips
           cargo test --frozen --no-default-features --features fips,pqc
