@@ -262,7 +262,7 @@ func TestExchangeBetweenNodes(t *testing.T) {
 	if !failed {
 		t.Fatal("failed send to unknown member not audited")
 	}
-	if n, err := bob.VerifyAudit(); err != nil || n == 0 {
+	if n, _, err := bob.VerifyAudit(nil); err != nil || n == 0 {
 		t.Fatalf("bob audit %d %v", n, err)
 	}
 	if _, err := audit.Verify(bob.AuditLogPath(), checkpoints{n: reopened}); !errors.Is(err, audit.ErrSignature) {
@@ -276,7 +276,7 @@ func TestAuditLogCannotBeRewrittenWithoutTheCore(t *testing.T) {
 	if _, err := alice.GenerateKey(ctx, "k", wire.UsageEncrypt); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := alice.VerifyAudit(); err != nil || n != 2 {
+	if n, _, err := alice.VerifyAudit(nil); err != nil || n != 2 {
 		t.Fatalf("verify %d %v", n, err)
 	}
 	if err := alice.Close(); err != nil {

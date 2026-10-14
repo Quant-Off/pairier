@@ -88,8 +88,8 @@ func (n *Node) openAudit() error {
 	return nil
 }
 
-func (n *Node) VerifyAudit() (uint64, error) {
-	return audit.Verify(n.st.AuditLogPath(), checkpoints{n: n})
+func (n *Node) VerifyAudit(anchor *audit.Anchor) (uint64, audit.Anchor, error) {
+	return audit.VerifyAnchored(n.st.AuditLogPath(), checkpoints{n: n}, anchor)
 }
 
 func (n *Node) audit(event string, fields map[string]string, err error) error {

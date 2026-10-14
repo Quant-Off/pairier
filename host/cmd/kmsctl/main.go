@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Quant-Off/pairier/host/internal/api"
+	"github.com/Quant-Off/pairier/host/internal/audit"
 	"github.com/Quant-Off/pairier/host/internal/node"
 	"github.com/Quant-Off/pairier/host/internal/wire"
 )
@@ -37,7 +38,7 @@ commands:
   inbox accept --id ENVELOPEID
   inbox reject --id ENVELOPEID
   peer health --member MEMBER --url https://HOST:PORT
-  audit verify
+  audit verify [--anchor SEQ:HASH]
   encrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   decrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   version
@@ -577,19 +578,29 @@ func (c *cli) cmdPeerHealth(ctx context.Context, args []string) (int, error) {
 
 func (c *cli) cmdAuditVerify(ctx context.Context, args []string) (int, error) {
 	fs := c.flags("audit verify")
+	anchorText := fs.String("anchor", "", "head recorded out of band (SEQ:HASH)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return 2, errors.New("audit verify: no arguments expected")
+		return 2, errors.New("audit verify: usage: audit verify [--anchor SEQ:HASH]")
+	}
+	var anchor *audit.Anchor
+	if *anchorText != "" {
+		a, err := audit.ParseAnchor(*anchorText)
+		if err != nil {
+			return 2, err
+		}
+		anchor = &a
 	}
 	n, err := c.open(ctx)
 	if err != nil {
 		return 1, err
 	}
 	defer n.Close()
-	count, err := n.VerifyAudit()
+	count, head, err := n.VerifyAudit(anchor)
 	if err != nil {
 		return 1, err
 	}
 	fmt.Fprintf(c.stdout, "verified\t%d\tentries\n", count)
+	fmt.Fprintf(c.stdout, "head\t%s\n", head)
 	return 0, nil
 }
 

@@ -192,8 +192,30 @@ func TestEndToEndExchange(t *testing.T) {
 	if list := must(nil, "--dir", bob, "key", "list"); strings.Count(list, "\n") != 5 {
 		t.Fatalf("bob key list %q", list)
 	}
-	if out := must(nil, "--dir", bob, "audit", "verify"); !strings.HasPrefix(out, "verified\t") {
+	out := must(nil, "--dir", bob, "audit", "verify")
+	if !strings.HasPrefix(out, "verified\t") {
 		t.Fatalf("audit verify %q", out)
+	}
+	anchor := field(out, "head")
+	must(nil, "--dir", bob, "key", "list")
+	must(nil, "--dir", bob, "audit", "verify", "--anchor", anchor)
+	if _, _, code := exec(nil, "--dir", bob, "audit", "verify", "--anchor", "1:zz"); code != 2 {
+		t.Fatalf("malformed anchor exit %d", code)
+	}
+	logPath := filepath.Join(bob, "audit.log")
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(raw), "\n")
+	if err := os.WriteFile(logPath, []byte(strings.Join(lines[:3], "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code := exec(nil, "--dir", bob, "audit", "verify", "--anchor", anchor); code == 0 || !strings.Contains(errOut, "anchored entry") {
+		t.Fatalf("truncated log passed the anchor: %d %s", code, errOut)
+	}
+	if err := os.WriteFile(logPath, raw, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	abs, err := filepath.Abs(bin)
 	if err != nil {
@@ -207,8 +229,8 @@ func TestEndToEndExchange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out, errb syncBuffer
-	if code := run([]string{"audit", "verify", "--dir", bob, "--core", rel, "--allow-unlocked-memory"}, nil, &out, &errb); code != 0 || !strings.HasPrefix(out.String(), "verified\t") {
-		t.Fatalf("global flags after command with relative core: %d %s%s", code, out.String(), errb.String())
+	var vout, errb syncBuffer
+	if code := run([]string{"audit", "verify", "--dir", bob, "--core", rel, "--allow-unlocked-memory"}, nil, &vout, &errb); code != 0 || !strings.HasPrefix(vout.String(), "verified\t") {
+		t.Fatalf("global flags after command with relative core: %d %s%s", code, vout.String(), errb.String())
 	}
 }

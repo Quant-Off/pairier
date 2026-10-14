@@ -229,3 +229,76 @@ func TestSignedCheckpoints(t *testing.T) {
 	}
 	_ = l2.Close()
 }
+
+func TestAnchorDetectsTruncationAndRollback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	now := func() time.Time { return time.Unix(1_700_000_000, 0) }
+	l, err := Open(path, Options{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := l.Append("key.send", map[string]string{"n": string(rune('a' + i))}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = l.Close()
+	n, head, err := VerifyAnchored(path, nil, nil)
+	if err != nil || n != 5 || head.Seq != 5 {
+		t.Fatalf("head %v %d %v", head, n, err)
+	}
+	parsed, err := ParseAnchor(head.String())
+	if err != nil || parsed != head {
+		t.Fatalf("round trip %v %v", parsed, err)
+	}
+	if _, _, err := VerifyAnchored(path, nil, &head); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := Read(path)
+	mid := Anchor{Seq: 3, Hash: entries[2].Hash}
+
+	raw, _ := os.ReadFile(path)
+	lines := strings.SplitAfter(string(raw), "\n")
+	if err := os.WriteFile(path, []byte(strings.Join(lines[:3], "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(path, nil); err != nil {
+		t.Fatalf("truncated prefix is still a valid chain: %v", err)
+	}
+	if _, _, err := VerifyAnchored(path, nil, &head); !errors.Is(err, ErrRollback) {
+		t.Fatalf("truncation not detected: %v", err)
+	}
+	if _, _, err := VerifyAnchored(path, nil, &mid); err != nil {
+		t.Fatalf("older anchor rejected: %v", err)
+	}
+	wrong := Anchor{Seq: 3, Hash: entries[1].Hash}
+	if _, _, err := VerifyAnchored(path, nil, &wrong); !errors.Is(err, ErrRollback) {
+		t.Fatalf("wrong hash accepted: %v", err)
+	}
+
+	l, err = Open(path, Options{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := l.Append("key.receive", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = l.Close()
+	if _, _, err := VerifyAnchored(path, nil, &head); !errors.Is(err, ErrRollback) {
+		t.Fatalf("rollback followed by new entries not detected: %v", err)
+	}
+}
+
+func TestParseAnchorRejectsMalformed(t *testing.T) {
+	h := strings.Repeat("ab", 32)
+	for _, s := range []string{"", "1", ":" + h, "0:" + h, "-1:" + h, "01:" + h, "1:" + strings.ToUpper(h), "1:" + h[:62], "1:" + h + "00", "x:" + h, "1:" + h + ":"} {
+		if _, err := ParseAnchor(s); !errors.Is(err, ErrAnchor) {
+			t.Fatalf("%q accepted: %v", s, err)
+		}
+	}
+	if _, err := ParseAnchor("7:" + h); err != nil {
+		t.Fatal(err)
+	}
+}

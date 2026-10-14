@@ -13,6 +13,8 @@ import (
 	"io/fs"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -31,7 +33,31 @@ var (
 	ErrInsecure  = errors.New("audit: insecure log file")
 	ErrField     = errors.New("audit: invalid event or field")
 	ErrSignature = errors.New("audit: checkpoint signature is invalid")
+	ErrAnchor    = errors.New("audit: invalid anchor")
+	ErrRollback  = errors.New("audit: log does not contain the anchored entry")
 )
+
+type Anchor struct {
+	Seq  uint64
+	Hash string
+}
+
+func (a Anchor) String() string { return strconv.FormatUint(a.Seq, 10) + ":" + a.Hash }
+
+func ParseAnchor(s string) (Anchor, error) {
+	seqText, hash, ok := strings.Cut(s, ":")
+	if !ok {
+		return Anchor{}, ErrAnchor
+	}
+	seq, err := strconv.ParseUint(seqText, 10, 64)
+	if err != nil || seq == 0 || seqText != strconv.FormatUint(seq, 10) {
+		return Anchor{}, ErrAnchor
+	}
+	if h, err := hex.DecodeString(hash); err != nil || len(h) != hashLen || hash != hex.EncodeToString(h) {
+		return Anchor{}, ErrAnchor
+	}
+	return Anchor{Seq: seq, Hash: hash}, nil
+}
 
 const checkpointDomain = "pairier/audit/checkpoint/v1"
 
@@ -324,18 +350,36 @@ func replayFrom(r io.Reader, seq uint64, prev string, requireSig bool) (uint64, 
 }
 
 func Verify(path string, v Verifier) (uint64, error) {
+	n, _, err := VerifyAnchored(path, v, nil)
+	return n, err
+}
+
+func VerifyAnchored(path string, v Verifier, anchor *Anchor) (uint64, Anchor, error) {
 	entries, err := Read(path)
 	if err != nil {
-		return 0, err
+		return 0, Anchor{}, err
 	}
 	if v != nil {
 		for i := range entries {
 			if err := verifyEntry(v, &entries[i]); err != nil {
-				return 0, err
+				return 0, Anchor{}, err
 			}
 		}
 	}
-	return uint64(len(entries)), nil
+	head := Anchor{Seq: 0, Hash: genesis}
+	if len(entries) > 0 {
+		last := entries[len(entries)-1]
+		head = Anchor{Seq: last.Seq, Hash: last.Hash}
+	}
+	if anchor != nil {
+		if anchor.Seq == 0 || anchor.Seq > uint64(len(entries)) {
+			return 0, Anchor{}, fmt.Errorf("%w: log ends at entry %d before anchored entry %d", ErrRollback, head.Seq, anchor.Seq)
+		}
+		if e := entries[anchor.Seq-1]; e.Seq != anchor.Seq || e.Hash != anchor.Hash {
+			return 0, Anchor{}, fmt.Errorf("%w: entry %d differs from the anchor", ErrRollback, anchor.Seq)
+		}
+	}
+	return uint64(len(entries)), head, nil
 }
 
 func Read(path string) ([]Entry, error) {
