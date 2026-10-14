@@ -44,3 +44,11 @@
 ## 빌드 및 실행
 
 이 내용에 관해서는 [USAGE.md](USAGE_KR.md)를 확인할 수 있습니다.
+
+## 보안
+
+취약점 신고 방법과 릴리즈 검증 방법은 [SECURITY_KR.md](SECURITY_KR.md)를 확인하세요.
+
+## 라이선스
+
+Apache-2.0입니다. [LICENSE](LICENSE)와 [NOTICE](NOTICE)를 확인하세요.

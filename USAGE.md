@@ -52,9 +52,10 @@ kmsctl 1.0.0 (go go1.27.2, go_fips=true)
 
 ## Installation
 
-The distribution tarball contains `kms-core`, `kmsd`, `kmsctl`, `VERSION` and `sbom.cdx.json`. Verify the checksums before extracting it.
+The distribution tarball contains `kms-core`, `kmsd`, `kmsctl`, `VERSION`, `sbom.cdx.json`, `LICENSE` and `NOTICE`. Before extracting it, verify the minisign signature on `SHA256SUMS` and then the checksums. The public key is `minisign.pub` in the repository root; see [SECURITY.md](SECURITY.md) for how to check it.
 
 ```bash
+$ minisign -Vm SHA256SUMS -p minisign.pub
 $ sha256sum -c SHA256SUMS
 $ tar -xzf pairier-1.0.0-linux-amd64.tar.gz
 ```

@@ -52,9 +52,10 @@ kmsctl 1.0.0 (go go1.27.2, go_fips=true)
 
 ## 설치
 
-배포 tarball에는 `kms-core`, `kmsd`, `kmsctl`, `VERSION`, `sbom.cdx.json`이 들어 있습니다. 해제 전 체크섬(checksum)을 확인하세요.
+배포 tarball에는 `kms-core`, `kmsd`, `kmsctl`, `VERSION`, `sbom.cdx.json`, `LICENSE`, `NOTICE`가 들어 있습니다. 해제 전에 `SHA256SUMS`의 minisign 서명(signature)을 먼저 확인하고, 그다음 체크섬(checksum)을 확인하세요. 공개키는 저장소 루트의 `minisign.pub`이며, 확인 방법은 [SECURITY_KR.md](SECURITY_KR.md)를 참고하세요.
 
 ```bash
+$ minisign -Vm SHA256SUMS -p minisign.pub
 $ sha256sum -c SHA256SUMS
 $ tar -xzf pairier-1.0.0-linux-amd64.tar.gz
 ```

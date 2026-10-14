@@ -44,3 +44,11 @@ The following features are also included.
 ## Build and run
 
 For details, see [USAGE.md](USAGE.md).
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report a vulnerability and how to verify a release.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
