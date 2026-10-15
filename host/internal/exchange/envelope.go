@@ -129,7 +129,7 @@ func IsSignatureAlg(alg uint16) bool {
 
 func IsKemAlg(alg uint16) bool {
 	switch alg {
-	case wire.AlgDHKEMP256, wire.AlgMLKEM768, wire.AlgMLKEM1024, wire.AlgHybridP256MLKEM768:
+	case wire.AlgDHKEMP256, wire.AlgMLKEM768, wire.AlgMLKEM1024, wire.AlgHybridP256MLKEM768, wire.AlgMLKEM768P256:
 		return true
 	default:
 		return false
@@ -138,7 +138,7 @@ func IsKemAlg(alg uint16) bool {
 
 func IsPQCAlg(alg uint16) bool {
 	switch alg {
-	case wire.AlgMLDSA65, wire.AlgMLDSA87, wire.AlgMLKEM768, wire.AlgMLKEM1024, wire.AlgHybridP256MLKEM768:
+	case wire.AlgMLDSA65, wire.AlgMLDSA87, wire.AlgMLKEM768, wire.AlgMLKEM1024, wire.AlgHybridP256MLKEM768, wire.AlgMLKEM768P256:
 		return true
 	default:
 		return false

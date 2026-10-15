@@ -139,7 +139,7 @@ func TestSignedEnvelopeAndCardWithRealCore(t *testing.T) {
 	ctx := context.Background()
 	sigAlg, kemAlg := uint16(wire.AlgECDSAP256SHA256), uint16(wire.AlgDHKEMP256)
 	if a.PQC() {
-		sigAlg, kemAlg = wire.AlgMLDSA65, wire.AlgHybridP256MLKEM768
+		sigAlg, kemAlg = wire.AlgMLDSA65, wire.AlgMLKEM768P256
 	}
 	aid, err := a.GenerateKey(ctx, sigAlg, wire.UsageSign, "a/identity")
 	if err != nil {

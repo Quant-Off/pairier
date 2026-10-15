@@ -69,6 +69,7 @@ var algNames = map[uint16]string{
 	wire.AlgMLKEM768:           "ml-kem-768",
 	wire.AlgMLKEM1024:          "ml-kem-1024",
 	wire.AlgHybridP256MLKEM768: "hybrid-p256-ml-kem-768",
+	wire.AlgMLKEM768P256:       "mlkem768-p256",
 }
 
 type cli struct {

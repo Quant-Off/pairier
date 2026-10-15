@@ -389,7 +389,7 @@ func TestPQCNodes(t *testing.T) {
 	bob, _ := initNode(t, "bob", true)
 	pair(t, alice, bob)
 	card, _, _ := alice.Card(ctx)
-	if card.IdentityAlg != wire.AlgMLDSA65 || card.KemAlg != wire.AlgHybridP256MLKEM768 {
+	if card.IdentityAlg != wire.AlgMLDSA65 || card.KemAlg != wire.AlgMLKEM768P256 {
 		t.Fatalf("pqc algs %x %x", card.IdentityAlg, card.KemAlg)
 	}
 	k, err := alice.GenerateKey(ctx, "k", wire.UsageDecrypt|wire.UsageExport)

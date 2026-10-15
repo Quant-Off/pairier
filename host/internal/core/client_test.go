@@ -392,7 +392,7 @@ func TestRealCoreExchange(t *testing.T) {
 
 	kemAlg := wire.AlgDHKEMP256
 	if b.PQC() {
-		kemAlg = wire.AlgHybridP256MLKEM768
+		kemAlg = wire.AlgMLKEM768P256
 	}
 	kem, err := b.GenerateKey(ctx, kemAlg, wire.UsageDecapsulate, "b/kem")
 	if err != nil {

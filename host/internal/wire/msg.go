@@ -27,6 +27,7 @@ const (
 	AlgMLKEM768           uint16 = 0x0200
 	AlgMLKEM1024          uint16 = 0x0201
 	AlgHybridP256MLKEM768 uint16 = 0x0210
+	AlgMLKEM768P256       uint16 = 0x0211
 )
 
 const (

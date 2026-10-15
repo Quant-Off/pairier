@@ -212,7 +212,7 @@ func (n *Node) createIdentity(ctx context.Context, memberID string, pqc bool) er
 	}
 	sigAlg, kemAlg := uint16(wire.AlgECDSAP256SHA256), uint16(wire.AlgDHKEMP256)
 	if pqc {
-		sigAlg, kemAlg = wire.AlgMLDSA65, wire.AlgHybridP256MLKEM768
+		sigAlg, kemAlg = wire.AlgMLDSA65, wire.AlgMLKEM768P256
 	}
 	now := n.opts.now().Unix()
 	id, err := n.core.GenerateKey(ctx, sigAlg, wire.UsageSign, "identity/"+memberID)
