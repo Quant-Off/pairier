@@ -1,3 +1,7 @@
+ifeq ($(OS),Windows_NT)
+$(error native Windows builds are not supported; build inside WSL2 with Ubuntu 24.04, see USAGE.md)
+endif
+
 GO    ?= go
 CARGO ?= cargo
 

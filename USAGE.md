@@ -29,6 +29,8 @@ Requirements:
 - FIPS core build: `cmake`, `perl`, Go (static linking is supported only on Linux x86_64/aarch64)
 - Distribution build: GNU tar (`brew install gnu-tar` on macOS), `python3`
 
+Builds run on Linux and macOS. Native Windows builds are not supported, because the core's isolation depends on Unix process and file permission features such as the inherited socket, the peer UID check, `ptrace` denial and `0700` permissions. On Windows, install the requirements above inside WSL2 with Ubuntu 24.04 and build there. Keep the repository and the node directory on the WSL file system, such as under `~/`. Windows drives under `/mnt/c` cannot hold Unix permissions by default, so the node directory checks reject them.
+
 All builds use only vendored dependencies and work without network access.
 
 ```bash
@@ -377,3 +379,5 @@ The directory that holds the socket must be owned by the core user or root. A di
 | `node: label contains control or bidirectional formatting characters`            | Remove control and bidirectional formatting characters from the label.                               |
 | `api: push rejected: 429 inbox full for this sender`                             | The recipient's inbox holds 64 pending envelopes from you. The recipient must accept or reject some. |
 | `transport: socket directory ... is writable by other users`                     | Remove group and other write permission from the socket directory.                                   |
+| `` linker `link.exe` not found ``                                                | Native Windows builds are not supported. Build inside WSL2 (see [Build](#build)).                    |
+| `undefined: syscall.Socketpair`, `undefined: syscall.Stat_t`                     | Same cause as above. The host uses Unix system calls, so build it inside WSL2.                       |

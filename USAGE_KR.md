@@ -29,6 +29,8 @@ pairier는 구성원 간에 대칭 키를 안전하게 생성하고 교환하기
 - FIPS 코어 빌드: `cmake`, `perl`, Go (정적 링크는 Linux x86_64/aarch64에서만 지원)
 - 배포본 생성: GNU tar (macOS의 경우 `brew install gnu-tar`), `python3`
 
+빌드는 Linux와 macOS에서 동작합니다. 코어의 격리가 상속 소켓, 피어 UID 검사, `ptrace` 거부, `0700` 권한 같은 Unix 프로세스와 파일 권한 기능에 의존하므로 Windows 네이티브 빌드는 지원하지 않습니다. Windows에서는 WSL2의 Ubuntu 24.04 안에 위 요구 사항을 설치해 빌드하세요. 저장소와 노드 디렉토리는 `~/` 아래처럼 WSL 파일 시스템에 두어야 합니다. `/mnt/c` 아래의 Windows 드라이브는 기본적으로 Unix 권한을 지정할 수 없어 노드 디렉토리 검사에서 거부됩니다.
+
 모든 빌드는 벤더링된 의존성만 사용하며 네트워크 없이 동작합니다.
 
 ```bash
@@ -377,3 +379,5 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | `node: label contains control or bidirectional formatting characters`            | 라벨에서 제어 문자와 양방향 서식 문자를 빼야 합니다.                                               |
 | `api: push rejected: 429 inbox full for this sender`                             | 수신자 inbox에 내가 보낸 대기 봉투가 64개 쌓였습니다. 수신자가 수락하거나 거절해야 합니다.                      |
 | `transport: socket directory ... is writable by other users`                     | 소켓 디렉토리에서 그룹과 기타 사용자의 쓰기 권한을 빼야 합니다.                                         |
+| `` linker `link.exe` not found ``                                                | Windows 네이티브 빌드는 지원하지 않습니다. WSL2 안에서 빌드해야 합니다([빌드](#빌드) 참고).                 |
+| `undefined: syscall.Socketpair`, `undefined: syscall.Stat_t`                     | 원인이 위와 같습니다. 호스트가 Unix 시스템 콜을 사용하므로 WSL2 안에서 빌드해야 합니다.                       |
