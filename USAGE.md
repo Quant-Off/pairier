@@ -9,7 +9,7 @@
 pairier is a KMS for securely generating and exchanging symmetric keys between members. Each member keeps their own node directory, and key material exists in plaintext only inside each member's own security core (`kms-core`). To send a key to another member, the sender seals it to the recipient's KEM public key and delivers it in an envelope signed with the sender's identity key.
 
 > [!WARNING]
-> pairier has not been released yet. Even after development is complete, verifying the safety of its features may take additional time. Please use pairier for development or research purposes only.
+> pairier has not had an external security review yet, and verifying the safety of its features may take additional time. Please use pairier for development or research purposes only.
 
 ## Components
 
@@ -52,13 +52,17 @@ kmsctl 1.0.0 (go go1.27.2, go_fips=true)
 
 ## Installation
 
+Release tarballs are provided for Linux amd64 and arm64 and require glibc 2.38 or later, such as Ubuntu 24.04 or Debian 13. `kmsd` and `kmsctl` are static binaries, and `kms-core` links glibc dynamically. No macOS binaries are provided, so build from source for development (see [Build](#build)).
+
 The distribution tarball contains `kms-core`, `kmsd`, `kmsctl`, `VERSION`, `sbom.cdx.json`, `LICENSE` and `NOTICE`. Before extracting it, verify the minisign signature on `SHA256SUMS` and then the checksums. The public key is `minisign.pub` in the repository root; see [SECURITY.md](SECURITY.md) for how to check it.
 
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
-$ sha256sum -c SHA256SUMS
+$ sha256sum --strict --ignore-missing -c SHA256SUMS
 $ tar -xzf pairier-1.0.0-linux-amd64.tar.gz
 ```
+
+`SHA256SUMS` lists the files for both architectures, and `--ignore-missing` skips the ones you did not download.
 
 > [!TIP]
 > `kmsctl` and `kmsd` use the `kms-core` in their own directory by default. If it is located elsewhere, you can set it with the `--core` flag or the `KMS_CORE` environment variable. The node directory can be set with the `--dir` flag or the `KMS_DIR` environment variable.
@@ -340,9 +344,9 @@ The directory that holds the socket must be owned by the core user or root. A di
 - **The audit log grows quickly in PQC mode.** ML-DSA signatures make each entry about 7KB, and every encryption and decryption also adds an entry.
 
 > [!CAUTION]
-> pairier has not been released yet. Even after development is complete, verifying the safety of its features may take additional time. Please use pairier for development or research purposes only.
+> pairier has not had an external security review yet, and verifying the safety of its features may take additional time. Please use pairier for development or research purposes only.
 >
-> **The items above are provisional until a stable release is published. Security requirements may increase significantly as verification progresses.**
+> **The items above may change as verification progresses, and security requirements may increase significantly.**
 
 ## Limits
 

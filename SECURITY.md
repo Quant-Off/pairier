@@ -7,7 +7,7 @@
 </div>
 
 > [!WARNING]
-> pairier has not been released yet. Even after development is complete, verifying the safety of its features may take additional time. Please use pairier for development or research purposes only.
+> pairier has not had an external security review yet, and verifying the safety of its features may take additional time. Please use pairier for development or research purposes only.
 
 ## Reporting a vulnerability
 
@@ -26,7 +26,7 @@ Please include the affected component and version (release or commit hash), step
 
 | Version | Supported |
 |---------|-----------|
-| 1.0.x   | Yes, once released |
+| 1.0.x   | Yes |
 | Unreleased commits | No |
 
 Security fixes are released only for the latest 1.0.x release.
@@ -87,7 +87,7 @@ $ sha256sum --strict -c SHA256SUMS
 
 Either form works. The first uses the key file, the second the key string itself. The repository's `scripts/verify.sh` (`make verify-dist`) also checks, beyond the signature and hashes, that every tarball and SBOM in the directory is listed in `SHA256SUMS` and that a tarball for the given version is present.
 
-Releases are also reproducible. `make dist FIPS=1` on Linux with the pinned toolchains produces a byte-identical tarball, so you can rebuild and compare `SHA256SUMS` instead of, or in addition to, checking the signature.
+Releases are also reproducible. Running `make dist FIPS=1` in a git checkout of the release tag on Ubuntu 24.04 (GCC 13.3) with the pinned Rust and Go toolchains produces byte-identical tarballs, so you can rebuild and compare the matching lines of `SHA256SUMS` instead of, or in addition to, checking the signature. Build inside a git checkout rather than an exported source tree, because Go records the commit in `kmsd` and `kmsctl` and the commit time sets the archive timestamps. A different C compiler, such as GCC 12 on Debian 12, produces a different `kms-core`.
 
 ## Cryptography
 

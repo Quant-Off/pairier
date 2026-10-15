@@ -9,7 +9,7 @@
 pairier는 구성원 간에 대칭 키를 안전하게 생성하고 교환하기 위한 KMS입니다. 구성원마다 자기 노드 디렉토리를 두고, 키 재료는 항상 각자의 보안 코어(`kms-core`) 안에서만 평문으로 존재합니다. 다른 구성원에게 키를 보낼 때는 수신자의 KEM 공개키로 봉인하고 송신자의 신원 키로 서명한 봉투(envelope)를 전달합니다.
 
 > [!WARNING]
-> 현재 pairier는 릴리즈가 공개되지 않았으며, 그 이전에 개발이 완료되더라도 기능의 안전성 검증을 위해 시간이 소요될 수 있습니다. pairier는 개발 또는 연구용으로만 사용해주시길 바랍니다.
+> pairier는 아직 외부 보안 검토를 받지 않았으며, 기능의 안전성 검증을 위해 시간이 더 소요될 수 있습니다. pairier는 개발 또는 연구용으로만 사용해주시길 바랍니다.
 
 ## 구성 요소
 
@@ -52,13 +52,17 @@ kmsctl 1.0.0 (go go1.27.2, go_fips=true)
 
 ## 설치
 
+배포 tarball은 Linux amd64와 arm64용으로 제공되며 glibc 2.38 이상이 필요합니다(Ubuntu 24.04, Debian 13 등). `kmsd`와 `kmsctl`은 정적 바이너리이고, `kms-core`는 glibc를 동적 링크합니다. macOS 바이너리는 제공하지 않기 때문에 개발용으로는 소스에서 직접 빌드하세요([빌드](#빌드) 참고).
+
 배포 tarball에는 `kms-core`, `kmsd`, `kmsctl`, `VERSION`, `sbom.cdx.json`, `LICENSE`, `NOTICE`가 들어 있습니다. 해제 전에 `SHA256SUMS`의 minisign 서명(signature)을 먼저 확인하고, 그다음 체크섬(checksum)을 확인하세요. 공개키는 저장소 루트의 `minisign.pub`이며, 확인 방법은 [SECURITY_KR.md](SECURITY_KR.md)를 참고하세요.
 
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
-$ sha256sum -c SHA256SUMS
+$ sha256sum --strict --ignore-missing -c SHA256SUMS
 $ tar -xzf pairier-1.0.0-linux-amd64.tar.gz
 ```
+
+`SHA256SUMS`에는 두 아키텍처의 파일이 모두 들어 있으며, `--ignore-missing`은 받지 않은 파일을 건너뜁니다.
 
 > [!TIP]
 > `kmsctl`과 `kmsd`는 같은 디렉토리에 있는 `kms-core`를 기본으로 사용합니다. 다른 위치에 둔 경우 `--core` 플래그 또는 `KMS_CORE` 환경 변수로 지정할 수 있습니다. 노드 디렉토리는 `--dir` 플래그 또는 `KMS_DIR` 환경 변수로 지정할 수 있습니다.
@@ -340,9 +344,9 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 - **PQC 모드 감사 로깅은 빠른 속도로 증가합니다.** ML-DSA 서명으로 인해 항목 하나가 약 7KB입니다. 암/복호화도 한 번마다 항목이 추가됩니다.
 
 > [!CAUTION]
-> 현재 pairier는 릴리즈가 공개되지 않았으며, 그 이전에 개발이 완료되더라도 기능의 안전성 검증을 위해 시간이 소요될 수 있습니다. pairier는 개발 또는 연구용으로만 사용해주시길 바랍니다.
+> pairier는 아직 외부 보안 검토를 받지 않았으며, 기능의 안전성 검증을 위해 시간이 더 소요될 수 있습니다. pairier는 개발 또는 연구용으로만 사용해주시길 바랍니다.
 >
-> **위 항목들은 안정된 릴리즈가 출시되기 전까지는 형식상 존재합니다. 검증이 진행됨에 따라 필요한 보안 요구사항이 충분히 증가될 수 있습니다.**
+> **위 항목들은 검증이 진행됨에 따라 언제든 바뀔 수 있으며, 필요한 보안 요구사항이 충분히 증가될 수 있습니다.**
 
 ## 한도
 
