@@ -1,0 +1,679 @@
+package node
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/Quant-Off/pairier/host/internal/audit"
+	"github.com/Quant-Off/pairier/host/internal/core"
+	"github.com/Quant-Off/pairier/host/internal/exchange"
+	"github.com/Quant-Off/pairier/host/internal/store"
+	"github.com/Quant-Off/pairier/host/internal/wire"
+)
+
+var (
+	ErrBadMemberID     = errors.New("node: invalid member id")
+	ErrPQCUnavailable  = errors.New("node: core does not provide pqc")
+	ErrFingerprint     = errors.New("node: fingerprint does not match the card")
+	ErrSelf            = errors.New("node: card belongs to this node")
+	ErrUnknownMember   = errors.New("node: unknown member")
+	ErrNotRecipient    = errors.New("node: envelope is addressed to another member")
+	ErrMetadata        = errors.New("node: stored metadata does not match the core")
+	ErrNotSymmetric    = errors.New("node: only symmetric keys can be generated or exchanged")
+	ErrSignatureAlg    = errors.New("node: envelope signature algorithm differs from the member card")
+	ErrUsageNotAllowed = errors.New("node: usage not allowed for this key kind")
+	ErrSenderMismatch  = errors.New("node: envelope sender differs from the authenticated peer")
+	ErrInboxFull       = errors.New("node: too many pending envelopes from this sender")
+	ErrLabel           = errors.New("node: label contains control or bidirectional formatting characters")
+)
+
+const auditTimeout = 10 * time.Second
+
+const SymmetricUsage = wire.UsageEncrypt | wire.UsageDecrypt | wire.UsageWrap | wire.UsageUnwrap | wire.UsageDerive | wire.UsageExport
+
+type Options struct {
+	Dir                 string
+	CoreBinary          string
+	AllowUnlockedMemory bool
+	Timeout             time.Duration
+	Stderr              io.Writer
+	Now                 func() time.Time
+}
+
+const MaxPendingPerSender = 64
+
+type Node struct {
+	inboxMu  sync.Mutex
+	opts     Options
+	st       *store.Store
+	core     *core.Client
+	log      *audit.Log
+	info     *store.Node
+	identity *store.KeyRecord
+	kem      *store.KeyRecord
+	auditKey *store.KeyRecord
+	tls      tls.Certificate
+}
+
+type checkpoints struct{ n *Node }
+
+func (c checkpoints) SignCheckpoint(msg []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), auditTimeout)
+	defer cancel()
+	return c.n.core.Sign(ctx, c.n.auditKey.Blob, msg)
+}
+
+func (c checkpoints) VerifyCheckpoint(msg, sig []byte) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), auditTimeout)
+	defer cancel()
+	return c.n.core.Verify(ctx, c.n.auditKey.Alg, c.n.auditKey.PublicKey, msg, sig)
+}
+
+func (n *Node) openAudit() error {
+	cp := checkpoints{n: n}
+	log, err := audit.Open(n.st.AuditLogPath(), audit.Options{Now: n.opts.Now, Signer: cp, Verifier: cp})
+	if err != nil {
+		return err
+	}
+	n.log = log
+	return nil
+}
+
+func (n *Node) VerifyAudit(anchor *audit.Anchor) (uint64, audit.Anchor, error) {
+	return audit.VerifyAnchored(n.st.AuditLogPath(), checkpoints{n: n}, anchor)
+}
+
+func (n *Node) audit(event string, fields map[string]string, err error) error {
+	if err != nil {
+		if fields == nil {
+			fields = map[string]string{}
+		}
+		fields["error"] = err.Error()
+	}
+	if aerr := n.log.Append(event, fields); aerr != nil {
+		return fmt.Errorf("node: audit: %w", aerr)
+	}
+	return err
+}
+
+func (o *Options) now() time.Time {
+	if o.Now != nil {
+		return o.Now()
+	}
+	return time.Now()
+}
+
+func (o *Options) spawn(ctx context.Context, rootKey string, pqc bool) (*core.Client, error) {
+	if o.CoreBinary == "" {
+		return nil, errors.New("node: core binary path is required")
+	}
+	return core.Spawn(ctx, core.Options{
+		Binary:              o.CoreBinary,
+		RootKeyFile:         rootKey,
+		PQC:                 pqc,
+		AllowUnlockedMemory: o.AllowUnlockedMemory,
+		Timeout:             o.Timeout,
+		Stderr:              o.Stderr,
+	})
+}
+
+func (o *Options) resolveCore() error {
+	if o.CoreBinary == "" {
+		return errors.New("node: core binary path is required")
+	}
+	abs, err := filepath.Abs(o.CoreBinary)
+	if err != nil {
+		return fmt.Errorf("node: core binary: %w", err)
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Errorf("node: core binary: %w", err)
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("node: core binary %s is not an executable file", abs)
+	}
+	o.CoreBinary = abs
+	return nil
+}
+
+func Init(ctx context.Context, o Options, memberID string, pqc bool) (*Node, error) {
+	if !exchange.ValidMemberID(memberID) {
+		return nil, ErrBadMemberID
+	}
+	if err := o.resolveCore(); err != nil {
+		return nil, err
+	}
+	st, err := store.Init(o.Dir)
+	if err != nil {
+		return nil, err
+	}
+	n, err := buildNode(ctx, o, st, memberID, pqc)
+	if err != nil {
+		return nil, errors.Join(err, st.Discard())
+	}
+	return n, nil
+}
+
+func buildNode(ctx context.Context, o Options, st *store.Store, memberID string, pqc bool) (*Node, error) {
+	if err := generateRootKey(ctx, o, st.RootKeyPath()); err != nil {
+		return nil, err
+	}
+	c, err := o.spawn(ctx, st.RootKeyPath(), pqc)
+	if err != nil {
+		return nil, err
+	}
+	n := &Node{opts: o, st: st, core: c}
+	if err := n.createIdentity(ctx, memberID, pqc); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	if err := n.createTLS(ctx); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	if err := n.openAudit(); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	if err := n.audit("node.init", map[string]string{"member": memberID, "identity": n.identity.KeyID, "kem": n.kem.KeyID, "audit_key": n.auditKey.KeyID, "pqc": fmt.Sprint(pqc), "fips": fmt.Sprint(c.FIPS())}, nil); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	return n, nil
+}
+
+func generateRootKey(ctx context.Context, o Options, path string) error {
+	cmd := exec.CommandContext(ctx, o.CoreBinary, "--generate-root-key", path)
+	cmd.Env = []string{}
+	cmd.Dir = "/"
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("node: generate root key: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+func (n *Node) createIdentity(ctx context.Context, memberID string, pqc bool) error {
+	if pqc && !n.core.PQC() {
+		return ErrPQCUnavailable
+	}
+	sigAlg, kemAlg := uint16(wire.AlgECDSAP256SHA256), uint16(wire.AlgDHKEMP256)
+	if pqc {
+		sigAlg, kemAlg = wire.AlgMLDSA65, wire.AlgHybridP256MLKEM768
+	}
+	now := n.opts.now().Unix()
+	id, err := n.core.GenerateKey(ctx, sigAlg, wire.UsageSign, "identity/"+memberID)
+	if err != nil {
+		return err
+	}
+	kem, err := n.core.GenerateKey(ctx, kemAlg, wire.UsageDecapsulate, "kem/"+memberID)
+	if err != nil {
+		return err
+	}
+	ak, err := n.core.GenerateKey(ctx, sigAlg, wire.UsageSign, "audit/"+memberID)
+	if err != nil {
+		return err
+	}
+	n.identity = &store.KeyRecord{KeyID: store.KeyIDString(id.KeyID), Alg: sigAlg, Usage: wire.UsageSign, Label: "identity/" + memberID, Blob: id.Blob, PublicKey: id.PublicKey, CreatedAt: now}
+	n.kem = &store.KeyRecord{KeyID: store.KeyIDString(kem.KeyID), Alg: kemAlg, Usage: wire.UsageDecapsulate, Label: "kem/" + memberID, Blob: kem.Blob, PublicKey: kem.PublicKey, CreatedAt: now}
+	if err := n.st.PutKey(n.identity); err != nil {
+		return err
+	}
+	if err := n.st.PutKey(n.kem); err != nil {
+		return err
+	}
+	n.auditKey = &store.KeyRecord{KeyID: store.KeyIDString(ak.KeyID), Alg: sigAlg, Usage: wire.UsageSign, Label: "audit/" + memberID, Blob: ak.Blob, PublicKey: ak.PublicKey, CreatedAt: now}
+	if err := n.st.PutKey(n.auditKey); err != nil {
+		return err
+	}
+	n.info = &store.Node{MemberID: memberID, IdentityKeyID: n.identity.KeyID, KemKeyID: n.kem.KeyID, AuditKeyID: n.auditKey.KeyID, PQC: pqc, CreatedAt: now}
+	return n.st.PutNode(n.info)
+}
+
+func Open(ctx context.Context, o Options) (*Node, error) {
+	if err := o.resolveCore(); err != nil {
+		return nil, err
+	}
+	st, err := store.Open(o.Dir)
+	if err != nil {
+		return nil, err
+	}
+	info, err := st.GetNode()
+	if err != nil {
+		return nil, err
+	}
+	c, err := o.spawn(ctx, st.RootKeyPath(), info.PQC)
+	if err != nil {
+		return nil, err
+	}
+	n := &Node{opts: o, st: st, core: c, info: info}
+	if info.PQC && !c.PQC() {
+		_ = n.Close()
+		return nil, ErrPQCUnavailable
+	}
+	if n.identity, err = n.Key(ctx, info.IdentityKeyID); err != nil {
+		_ = n.Close()
+		return nil, fmt.Errorf("node: identity key: %w", err)
+	}
+	if n.kem, err = n.Key(ctx, info.KemKeyID); err != nil {
+		_ = n.Close()
+		return nil, fmt.Errorf("node: kem key: %w", err)
+	}
+	if n.auditKey, err = n.Key(ctx, info.AuditKeyID); err != nil {
+		_ = n.Close()
+		return nil, fmt.Errorf("node: audit key: %w", err)
+	}
+	if n.identity.Usage != wire.UsageSign || !exchange.IsSignatureAlg(n.identity.Alg) || n.identity.Label != "identity/"+info.MemberID ||
+		n.kem.Usage != wire.UsageDecapsulate || !exchange.IsKemAlg(n.kem.Alg) || n.kem.Label != "kem/"+info.MemberID ||
+		n.auditKey.Usage != wire.UsageSign || !exchange.IsSignatureAlg(n.auditKey.Alg) || n.auditKey.Label != "audit/"+info.MemberID ||
+		len(n.identity.PublicKey) == 0 || len(n.kem.PublicKey) == 0 || len(n.auditKey.PublicKey) == 0 {
+		_ = n.Close()
+		return nil, ErrMetadata
+	}
+	if err := n.loadTLS(ctx); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	if err := n.openAudit(); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	if err := n.audit("node.open", map[string]string{"member": info.MemberID, "fips": fmt.Sprint(c.FIPS()), "pqc": fmt.Sprint(c.PQC())}, nil); err != nil {
+		_ = n.Close()
+		return nil, err
+	}
+	return n, nil
+}
+
+func (n *Node) Close() error {
+	var lerr error
+	if n.log != nil {
+		lerr = n.log.Close()
+	}
+	cerr := n.core.Close()
+	return errors.Join(lerr, cerr)
+}
+
+func (n *Node) AuditLogPath() string { return n.st.AuditLogPath() }
+func (n *Node) MemberID() string     { return n.info.MemberID }
+func (n *Node) PQC() bool            { return n.info.PQC }
+func (n *Node) FIPS() bool           { return n.core.FIPS() }
+func (n *Node) Core() *core.Client {
+	return n.core
+}
+
+func (n *Node) Key(ctx context.Context, id string) (*store.KeyRecord, error) {
+	rec, err := n.st.GetKey(id)
+	if err != nil {
+		return nil, err
+	}
+	info, err := n.core.Inspect(ctx, rec.Blob)
+	if err != nil {
+		return nil, err
+	}
+	if store.KeyIDString(info.KeyID) != rec.KeyID || info.Alg != rec.Alg || info.Usage != rec.Usage || info.Label != rec.Label ||
+		!bytes.Equal(info.PublicKey, rec.PublicKey) {
+		return nil, ErrMetadata
+	}
+	return rec, nil
+}
+
+func (n *Node) Keys() ([]*store.KeyRecord, error) { return n.st.ListKeys() }
+
+func ValidLabel(label string) bool {
+	if !utf8.ValidString(label) {
+		return false
+	}
+	for _, r := range label {
+		switch {
+		case unicode.IsControl(r), r == 0x061c, r == 0x200e, r == 0x200f,
+			r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+			return false
+		}
+	}
+	return true
+}
+
+func (n *Node) GenerateKey(ctx context.Context, label string, usage uint32) (*store.KeyRecord, error) {
+	if usage == 0 || usage&^SymmetricUsage != 0 {
+		return nil, ErrUsageNotAllowed
+	}
+	if len(label) > wire.MaxLabel {
+		return nil, fmt.Errorf("node: label exceeds %d bytes", wire.MaxLabel)
+	}
+	if !ValidLabel(label) {
+		return nil, ErrLabel
+	}
+	k, err := n.core.GenerateKey(ctx, wire.AlgAES256GCM, usage, label)
+	if err != nil {
+		return nil, n.audit("key.generate", map[string]string{"label": label}, err)
+	}
+	rec := &store.KeyRecord{KeyID: store.KeyIDString(k.KeyID), Alg: wire.AlgAES256GCM, Usage: usage, Label: label, Blob: k.Blob, CreatedAt: n.opts.now().Unix()}
+	if err := n.st.PutKey(rec); err != nil {
+		return nil, n.audit("key.generate", map[string]string{"key": rec.KeyID, "label": label}, err)
+	}
+	if err := n.audit("key.generate", map[string]string{"key": rec.KeyID, "label": label, "usage": fmt.Sprint(usage)}, nil); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (n *Node) Encrypt(ctx context.Context, keyID string, plaintext, aad []byte) ([]byte, error) {
+	rec, err := n.Key(ctx, keyID)
+	if err != nil {
+		return nil, n.audit("key.encrypt", map[string]string{"key": keyID}, err)
+	}
+	ct, err := n.core.Encrypt(ctx, rec.Blob, plaintext, aad)
+	if err := n.audit("key.encrypt", map[string]string{"key": keyID, "bytes": fmt.Sprint(len(plaintext))}, err); err != nil {
+		return nil, err
+	}
+	return ct, nil
+}
+
+func (n *Node) Decrypt(ctx context.Context, keyID string, ciphertext, aad []byte) ([]byte, error) {
+	rec, err := n.Key(ctx, keyID)
+	if err != nil {
+		return nil, n.audit("key.decrypt", map[string]string{"key": keyID}, err)
+	}
+	pt, err := n.core.Decrypt(ctx, rec.Blob, ciphertext, aad)
+	if err := n.audit("key.decrypt", map[string]string{"key": keyID, "bytes": fmt.Sprint(len(ciphertext))}, err); err != nil {
+		return nil, err
+	}
+	return pt, nil
+}
+
+func (n *Node) Card(ctx context.Context) (*exchange.Card, []byte, error) {
+	card := &exchange.Card{
+		MemberID:          n.info.MemberID,
+		IdentityAlg:       n.identity.Alg,
+		IdentityPublicKey: n.identity.PublicKey,
+		KemAlg:            n.kem.Alg,
+		KemPublicKey:      n.kem.PublicKey,
+		TLSPublicKey:      n.TLSPublicKey(),
+		CreatedAt:         uint64(n.info.CreatedAt),
+	}
+	if err := exchange.SignCard(ctx, n.core, n.identity.Blob, card); err != nil {
+		return nil, nil, err
+	}
+	raw, err := card.Encode()
+	if err != nil {
+		return nil, nil, err
+	}
+	return card, raw, nil
+}
+
+func (n *Node) AddMember(ctx context.Context, raw []byte, fingerprint string) (*store.MemberRecord, error) {
+	rec, err := n.addMember(ctx, raw, fingerprint)
+	fields := map[string]string{}
+	if rec != nil {
+		fields["member"] = rec.MemberID
+		fields["fingerprint"] = rec.Fingerprint
+	}
+	if err := n.audit("member.add", fields, err); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (n *Node) addMember(ctx context.Context, raw []byte, fingerprint string) (*store.MemberRecord, error) {
+	card, err := exchange.DecodeCard(raw)
+	if err != nil {
+		return nil, err
+	}
+	if card.MemberID == n.info.MemberID {
+		return nil, ErrSelf
+	}
+	if err := card.Verify(ctx, n.core); err != nil {
+		return nil, err
+	}
+	if !card.MatchesFingerprint(fingerprint) {
+		return nil, ErrFingerprint
+	}
+	fp, err := card.Fingerprint()
+	if err != nil {
+		return nil, err
+	}
+	rec := &store.MemberRecord{MemberID: card.MemberID, Card: raw, Fingerprint: fp, AddedAt: n.opts.now().Unix()}
+	if err := n.st.PutMember(rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (n *Node) Members() ([]*store.MemberRecord, error) { return n.st.ListMembers() }
+
+func (n *Node) Member(ctx context.Context, id string) (*exchange.Card, error) {
+	rec, err := n.st.GetMember(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrBadID) {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownMember, id)
+		}
+		return nil, err
+	}
+	card, err := exchange.DecodeCard(rec.Card)
+	if err != nil {
+		return nil, err
+	}
+	if card.MemberID != id || !card.MatchesFingerprint(rec.Fingerprint) {
+		return nil, ErrMetadata
+	}
+	if err := card.Verify(ctx, n.core); err != nil {
+		return nil, err
+	}
+	return card, nil
+}
+
+func (n *Node) Send(ctx context.Context, keyID, to string, usage uint32) ([]byte, error) {
+	env, err := n.send(ctx, keyID, to, usage)
+	if err := n.audit("key.send", map[string]string{"key": keyID, "to": to, "usage": fmt.Sprint(usage)}, err); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+func (n *Node) send(ctx context.Context, keyID, to string, usage uint32) ([]byte, error) {
+	rec, err := n.Key(ctx, keyID)
+	if err != nil {
+		return nil, err
+	}
+	if rec.Alg != wire.AlgAES256GCM {
+		return nil, ErrNotSymmetric
+	}
+	card, err := n.Member(ctx, to)
+	if err != nil {
+		return nil, err
+	}
+	ectx, err := exchange.NewContext(n.info.MemberID, to, n.opts.now())
+	if err != nil {
+		return nil, err
+	}
+	cb, err := ectx.Encode()
+	if err != nil {
+		return nil, err
+	}
+	pkg, err := n.core.ExportKey(ctx, rec.Blob, card.KemAlg, card.KemPublicKey, usage, cb)
+	if err != nil {
+		return nil, err
+	}
+	env, err := exchange.Seal(ctx, n.core, n.identity.Blob, n.identity.Alg, ectx, pkg)
+	if err != nil {
+		return nil, err
+	}
+	return env.Encode()
+}
+
+func (n *Node) Receive(ctx context.Context, raw []byte) (*store.KeyRecord, error) {
+	rec, err := n.receive(ctx, raw)
+	fields := map[string]string{"envelope": store.InboxID(raw)}
+	if rec != nil {
+		fields["key"] = rec.KeyID
+		fields["from"] = rec.Origin.Sender
+		fields["usage"] = fmt.Sprint(rec.Usage)
+	}
+	if err := n.audit("key.receive", fields, err); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (n *Node) receive(ctx context.Context, raw []byte) (*store.KeyRecord, error) {
+	env, ectx, err := n.verifyEnvelope(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	imp, err := n.core.ImportKey(ctx, n.kem.Blob, env.Package, env.Context)
+	if err != nil {
+		return nil, err
+	}
+	rec := &store.KeyRecord{
+		KeyID:     store.KeyIDString(imp.KeyID),
+		Alg:       imp.Alg,
+		Usage:     imp.Usage,
+		Label:     imp.Label,
+		Blob:      imp.Blob,
+		CreatedAt: n.opts.now().Unix(),
+		Origin:    &store.Origin{Sender: ectx.Sender, SentAt: int64(ectx.CreatedAt)},
+	}
+	if err := n.st.PutKey(rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (n *Node) verifyEnvelope(ctx context.Context, raw []byte) (*exchange.Envelope, *exchange.Context, error) {
+	env, err := exchange.DecodeEnvelope(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	peek, err := exchange.DecodeContext(env.Context)
+	if err != nil {
+		return nil, nil, err
+	}
+	if peek.Recipient != n.info.MemberID {
+		return nil, nil, ErrNotRecipient
+	}
+	card, err := n.Member(ctx, peek.Sender)
+	if err != nil {
+		return nil, nil, err
+	}
+	if env.SigAlg != card.IdentityAlg {
+		return nil, nil, ErrSignatureAlg
+	}
+	ectx, err := env.Verify(ctx, n.core, card.IdentityPublicKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	return env, ectx, nil
+}
+
+func (n *Node) StoreInbox(ctx context.Context, raw []byte, from string) (*store.InboxRecord, error) {
+	rec, err := n.storeInbox(ctx, raw, from)
+	fields := map[string]string{"from": from, "envelope": store.InboxID(raw)}
+	if err := n.audit("inbox.put", fields, err); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (n *Node) storeInbox(ctx context.Context, raw []byte, from string) (*store.InboxRecord, error) {
+	env, err := exchange.DecodeEnvelope(raw)
+	if err != nil {
+		return nil, err
+	}
+	claimed, err := exchange.DecodeContext(env.Context)
+	if err != nil {
+		return nil, err
+	}
+	if claimed.Sender != from {
+		return nil, ErrSenderMismatch
+	}
+	_, ectx, err := n.verifyEnvelope(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	if ectx.Sender != from {
+		return nil, ErrSenderMismatch
+	}
+	n.inboxMu.Lock()
+	defer n.inboxMu.Unlock()
+	items, err := n.Inbox()
+	if err != nil {
+		return nil, err
+	}
+	pending := 0
+	for _, it := range items {
+		if it.Sender == from {
+			pending++
+		}
+	}
+	if pending >= MaxPendingPerSender {
+		return nil, ErrInboxFull
+	}
+	rec := &store.InboxRecord{ID: store.InboxID(raw), Envelope: raw, ReceivedAt: n.opts.now().Unix()}
+	if err := n.st.PutInbox(rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+type InboxItem struct {
+	ID         string
+	Sender     string
+	SentAt     int64
+	ReceivedAt int64
+}
+
+func (n *Node) Inbox() ([]InboxItem, error) {
+	recs, err := n.st.ListInbox()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]InboxItem, 0, len(recs))
+	for _, r := range recs {
+		item := InboxItem{ID: r.ID, ReceivedAt: r.ReceivedAt}
+		if env, err := exchange.DecodeEnvelope(r.Envelope); err == nil {
+			if c, err := exchange.DecodeContext(env.Context); err == nil {
+				item.Sender = c.Sender
+				item.SentAt = int64(c.CreatedAt)
+			}
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (n *Node) Accept(ctx context.Context, id string) (*store.KeyRecord, error) {
+	rec, err := n.st.GetInbox(id)
+	if err != nil {
+		return nil, err
+	}
+	key, err := n.Receive(ctx, rec.Envelope)
+	if err != nil {
+		return nil, err
+	}
+	if err := n.st.DeleteInbox(id); err != nil {
+		return nil, err
+	}
+	if err := n.audit("inbox.accept", map[string]string{"envelope": id, "key": key.KeyID}, nil); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+func (n *Node) Reject(ctx context.Context, id string) error {
+	err := n.st.DeleteInbox(id)
+	return n.audit("inbox.reject", map[string]string{"envelope": id}, err)
+}

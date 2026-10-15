@@ -64,6 +64,35 @@ func helloHandler(caps uint64) handler {
 			rb, _ := wire.EncodeBody(&wire.RandomResponse{Bytes: make([]byte, req.Len)})
 			rh, _ := wire.NewResponse(h.Op, h.ID, uint32(len(rb)))
 			return rh, rb
+		case wire.OpKeyInspect:
+			var req wire.KeyInspectRequest
+			if err := wire.DecodeBody(&req, body); err != nil {
+				return wire.NewError(h.Op, h.ID, wire.StatusProtocol), nil
+			}
+			rsp := &wire.KeyInspectResponse{Alg: wire.AlgAES256GCM, Usage: wire.UsageDecrypt | wire.UsageExport, Label: "fake/" + string(req.KeyBlob)}
+			copy(rsp.KeyID[:], req.KeyBlob)
+			rb, _ := wire.EncodeBody(rsp)
+			rh, _ := wire.NewResponse(h.Op, h.ID, uint32(len(rb)))
+			return rh, rb
+		case wire.OpKeyExport:
+			var req wire.KeyExportRequest
+			if err := wire.DecodeBody(&req, body); err != nil {
+				return wire.NewError(h.Op, h.ID, wire.StatusProtocol), nil
+			}
+			rb, _ := wire.EncodeBody(&wire.KeyExportResponse{Package: append(append([]byte{}, req.Context...), req.RecipientPublicKey...)})
+			rh, _ := wire.NewResponse(h.Op, h.ID, uint32(len(rb)))
+			return rh, rb
+		case wire.OpKeyImport:
+			var req wire.KeyImportRequest
+			if err := wire.DecodeBody(&req, body); err != nil {
+				return wire.NewError(h.Op, h.ID, wire.StatusProtocol), nil
+			}
+			if !bytes.HasPrefix(req.Package, req.Context) {
+				return wire.NewError(h.Op, h.ID, wire.StatusInvalidArgument), nil
+			}
+			rb, _ := wire.EncodeBody(&wire.KeyImportResponse{KeyBlob: req.KemKeyBlob, Alg: wire.AlgAES256GCM, Usage: wire.UsageDecrypt, Label: "imported"})
+			rh, _ := wire.NewResponse(h.Op, h.ID, uint32(len(rb)))
+			return rh, rb
 		default:
 			return wire.NewError(h.Op, h.ID, wire.StatusUnsupportedOp), nil
 		}
@@ -89,6 +118,45 @@ func TestHelloAndCapabilities(t *testing.T) {
 	}
 	if _, err := c.Random(context.Background(), wire.MaxRandom+1); err == nil {
 		t.Fatal("expected limit error")
+	}
+}
+
+func TestExchangeCallsOverFakeCore(t *testing.T) {
+	conn := fakeCore(t, helloHandler(0))
+	c, err := newClient(context.Background(), conn, nil, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ctx := context.Background()
+	info, err := c.Inspect(ctx, []byte("blob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Alg != wire.AlgAES256GCM || info.Usage != wire.UsageDecrypt|wire.UsageExport || info.Label != "fake/blob" || string(info.KeyID[:4]) != "blob" {
+		t.Fatalf("unexpected info %+v", info)
+	}
+	pkg, err := c.ExportKey(ctx, []byte("blob"), wire.AlgDHKEMP256, []byte("pk"), wire.UsageDecrypt, []byte("ctx"))
+	if err != nil || string(pkg) != "ctxpk" {
+		t.Fatalf("export: %q %v", pkg, err)
+	}
+	imp, err := c.ImportKey(ctx, []byte("kem"), pkg, []byte("ctx"))
+	if err != nil || string(imp.Blob) != "kem" || imp.Usage != wire.UsageDecrypt || imp.Label != "imported" {
+		t.Fatalf("import: %+v %v", imp, err)
+	}
+	_, err = c.ImportKey(ctx, []byte("kem"), pkg, []byte("other"))
+	var se *StatusError
+	if !errors.As(err, &se) || se.Status != wire.StatusInvalidArgument {
+		t.Fatalf("expected invalid argument, got %v", err)
+	}
+	if _, err := c.ExportKey(ctx, nil, 0, nil, 0, make([]byte, wire.MaxContext+1)); !errors.As(err, &se) || se.Status != wire.StatusLimitExceeded {
+		t.Fatalf("expected limit error, got %v", err)
+	}
+	if _, err := c.ImportKey(ctx, nil, make([]byte, wire.MaxPackage+1), nil); !errors.As(err, &se) || se.Status != wire.StatusLimitExceeded {
+		t.Fatalf("expected limit error, got %v", err)
+	}
+	if err := c.Ping(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -303,6 +371,77 @@ func TestRealCoreSpawn(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "serving peer pid") {
 		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
+func TestRealCoreExchange(t *testing.T) {
+	bin := realBinary(t)
+	ctx := context.Background()
+	spawn := func() *Client {
+		var stderr bytes.Buffer
+		c, err := Spawn(ctx, Options{Binary: bin, EphemeralRoot: true, PQC: true, AllowUnlockedMemory: true, Stderr: &stderr})
+		if err != nil {
+			t.Fatalf("spawn: %v\n%s", err, stderr.String())
+		}
+		return c
+	}
+	a := spawn()
+	defer a.Close()
+	b := spawn()
+	defer b.Close()
+
+	kemAlg := wire.AlgDHKEMP256
+	if b.PQC() {
+		kemAlg = wire.AlgHybridP256MLKEM768
+	}
+	kem, err := b.GenerateKey(ctx, kemAlg, wire.UsageDecapsulate, "b/kem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := a.GenerateKey(ctx, wire.AlgAES256GCM, wire.UsageEncrypt|wire.UsageDecrypt|wire.UsageExport, "a/shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := a.Inspect(ctx, k.Blob)
+	if err != nil || info.KeyID != k.KeyID || info.Label != "a/shared" || info.Alg != wire.AlgAES256GCM || len(info.PublicKey) != 0 {
+		t.Fatalf("inspect: %+v %v", info, err)
+	}
+	kinfo, err := b.Inspect(ctx, kem.Blob)
+	if err != nil || !bytes.Equal(kinfo.PublicKey, kem.PublicKey) {
+		t.Fatalf("kem inspect: %v", err)
+	}
+	_, err = b.Inspect(ctx, k.Blob)
+	var se *StatusError
+	if !errors.As(err, &se) || se.Status != wire.StatusInvalidKeyBlob {
+		t.Fatalf("foreign blob should be rejected, got %v", err)
+	}
+	ct, err := a.Encrypt(ctx, k.Blob, []byte("for b"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := a.ExportKey(ctx, k.Blob, kemAlg, kem.PublicKey, wire.UsageDecrypt, []byte("from=a;to=b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.ImportKey(ctx, kem.Blob, pkg, []byte("from=a;to=c")); !errors.As(err, &se) || se.Status != wire.StatusInvalidArgument {
+		t.Fatalf("context mismatch should fail, got %v", err)
+	}
+	imp, err := b.ImportKey(ctx, kem.Blob, pkg, []byte("from=a;to=b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imp.KeyID != k.KeyID || imp.Usage != wire.UsageDecrypt || imp.Label != "a/shared" {
+		t.Fatalf("imported: %+v", imp)
+	}
+	pt, err := b.Decrypt(ctx, imp.Blob, ct, nil)
+	if err != nil || string(pt) != "for b" {
+		t.Fatalf("decrypt: %q %v", pt, err)
+	}
+	if _, err := b.Encrypt(ctx, imp.Blob, []byte("x"), nil); !errors.As(err, &se) || se.Status != wire.StatusUsageDenied {
+		t.Fatalf("granted usage should be enforced, got %v", err)
+	}
+	if _, err := a.ExportKey(ctx, k.Blob, kemAlg, kem.PublicKey, wire.UsageEncrypt|wire.UsageDecrypt|wire.UsageWrap, []byte("x")); !errors.As(err, &se) || se.Status != wire.StatusUsageDenied {
+		t.Fatalf("usage escalation should fail, got %v", err)
 	}
 }
 

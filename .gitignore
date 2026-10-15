@@ -5,5 +5,7 @@
 *.log
 *.pem
 *.key
+*.card
 .DS_Store
 .idea/
+l-tests/

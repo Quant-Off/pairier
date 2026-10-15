@@ -26,9 +26,10 @@ pub(crate) struct Config {
 pub(crate) enum Action {
     Serve(Config),
     GenerateRootKey(PathBuf),
+    Version,
 }
 
-const USAGE: &str = "usage: kms-core (--fd N | --socket PATH) (--root-key-file PATH | --ephemeral-root) [--pqc] [--allow-unlocked-memory] [--peer-uid UID]\n       kms-core --generate-root-key PATH";
+const USAGE: &str = "usage: kms-core (--fd N | --socket PATH) (--root-key-file PATH | --ephemeral-root) [--pqc] [--allow-unlocked-memory] [--peer-uid UID]\n       kms-core --generate-root-key PATH\n       kms-core --version";
 
 pub(crate) fn parse(argv: &[String]) -> Result<Action, String> {
     let mut transport: Option<Transport> = None;
@@ -37,6 +38,7 @@ pub(crate) fn parse(argv: &[String]) -> Result<Action, String> {
     let mut pqc = false;
     let mut allow_unlocked_memory = false;
     let mut peer_uid: Option<u32> = None;
+    let mut version = false;
 
     let mut it = argv.iter();
     while let Some(flag) = it.next() {
@@ -76,6 +78,7 @@ pub(crate) fn parse(argv: &[String]) -> Result<Action, String> {
                 set_once(&mut generate, PathBuf::from(v), "--generate-root-key")?;
             }
             "--pqc" => pqc = true,
+            "--version" => version = true,
             "--allow-unlocked-memory" => allow_unlocked_memory = true,
             "--peer-uid" => {
                 let v = value()?;
@@ -84,6 +87,19 @@ pub(crate) fn parse(argv: &[String]) -> Result<Action, String> {
             }
             other => return Err(format!("unknown argument {other:?}\n{USAGE}")),
         }
+    }
+
+    if version {
+        if transport.is_some()
+            || root.is_some()
+            || generate.is_some()
+            || pqc
+            || allow_unlocked_memory
+            || peer_uid.is_some()
+        {
+            return Err(format!("--version takes no other options\n{USAGE}"));
+        }
+        return Ok(Action::Version);
     }
 
     if let Some(path) = generate {
@@ -166,6 +182,8 @@ mod tests {
             Action::GenerateRootKey(PathBuf::from("/k"))
         );
         assert!(parse(&args("--generate-root-key /k --pqc")).is_err());
+        assert_eq!(parse(&args("--version")).unwrap(), Action::Version);
+        assert!(parse(&args("--version --fd 3")).is_err());
         assert!(parse(&args("--fd 3")).is_err());
         assert!(parse(&args("--ephemeral-root")).is_err());
         assert!(parse(&args("--fd -1 --ephemeral-root")).is_err());

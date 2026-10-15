@@ -1,0 +1,163 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  GOTOOLCHAIN: local
+  GOPROXY: "off"
+  GOFLAGS: "-mod=vendor -trimpath"
+  CGO_ENABLED: "0"
+
+jobs:
+  core:
+    env:
+      CARGO_NET_OFFLINE: "true"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: host/go.mod
+          cache: false
+      - name: toolchain
+        run: cd core && rustup show active-toolchain
+      - name: lint
+        run: make lint-core
+      - name: test
+        run: |
+          [ "$RUNNER_OS" != Linux ] || sudo prlimit --pid $$ --memlock=unlimited:unlimited
+          make test-core
+      - name: feature matrix
+        run: |
+          [ "$RUNNER_OS" != Linux ] || sudo prlimit --pid $$ --memlock=unlimited:unlimited
+          cd core
+          cargo test --frozen -p kms-engine
+          cargo test --frozen -p kms-engine --features pqc
+          cargo test --frozen --no-default-features --features non-fips
+
+  host:
+    env:
+      CARGO_NET_OFFLINE: "true"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: host/go.mod
+          cache: false
+      - name: toolchain
+        run: cd core && rustup show active-toolchain
+      - name: lint
+        run: make lint-host
+      - name: test
+        run: make test-host
+      - name: fuzz smoke
+        run: |
+          cd host
+          go test -run='^$' -fuzz=FuzzDecodeHeader -fuzztime=20s ./internal/wire/
+          go test -run='^$' -fuzz=FuzzDecodeBody -fuzztime=20s ./internal/wire/
+
+  fips:
+    env:
+      CARGO_NET_OFFLINE: "true"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: host/go.mod
+          cache: false
+      - name: toolchain
+        run: cd core && rustup show active-toolchain
+      - name: fips engine tests
+        run: |
+          sudo prlimit --pid $$ --memlock=unlimited:unlimited
+          cd core
+          cargo test --frozen --no-default-features --features fips
+          cargo test --frozen --no-default-features --features fips,pqc
+      - name: fips release build
+        run: |
+          make build-core FIPS=1
+          out=$(core/target/release/kms-core --version)
+          echo "$out"
+          case "$out" in *"fips=true"*) ;; *) echo "fips mode not active"; exit 1;; esac
+      - name: static link check
+        run: |
+          if ldd core/target/release/kms-core | grep -q aws_lc; then
+            echo "fips module is dynamically linked"; exit 1
+          fi
+
+  supply-chain:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: toolchain
+        run: cd core && rustup show active-toolchain
+      - name: vendor integrity
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: |
+          cd core
+          cargo metadata --frozen --format-version 1 > /dev/null
+          for d in vendor/*/; do
+            test -f "$d/.cargo-checksum.json" || { echo "missing checksum in $d"; exit 1; }
+          done
+      - name: cargo deny
+        run: |
+          cargo install cargo-deny --version 0.19.8 --locked
+          cd core && cargo deny check advisories licenses bans sources
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: host/go.mod
+          cache: false
+      - name: govulncheck
+        run: |
+          GOFLAGS= GOPROXY=https://proxy.golang.org go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          cd host && "$(go env GOPATH)/bin/govulncheck" ./...
+
+  dist:
+    needs: [core, host, fips]
+    env:
+      CARGO_NET_OFFLINE: "true"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: host/go.mod
+          cache: false
+      - name: toolchain
+        run: cd core && rustup show active-toolchain
+      - name: dist (fips)
+        run: make dist FIPS=1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pairier-${{ matrix.os }}
+          path: |
+            dist/*.tar.gz
+            dist/*.cdx.json
+            dist/SHA256SUMS

@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::print_stderr)]
+#![allow(clippy::print_stderr, clippy::print_stdout)]
 
 mod args;
 mod rootfile;
@@ -9,6 +9,8 @@ mod transport;
 use std::process::ExitCode;
 
 use kms_engine::Engine;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 use crate::args::{Action, Config, RootSource};
 
@@ -36,6 +38,16 @@ fn run(argv: &[String]) -> Result<(), String> {
             Ok(())
         }
         Action::Serve(cfg) => serve(&cfg),
+        Action::Version => {
+            println!(
+                "kms-core {VERSION} ({} {}, fips={}, pqc={})",
+                kms_engine::ENGINE_NAME,
+                kms_engine::ENGINE_VERSION,
+                Engine::fips_mode(),
+                cfg!(feature = "pqc")
+            );
+            Ok(())
+        }
     }
 }
 
@@ -56,16 +68,9 @@ fn harden(cfg: &Config) -> Result<(), String> {
 fn serve(cfg: &Config) -> Result<(), String> {
     harden(cfg)?;
 
-    let mut stream = transport::acquire(&cfg.transport).map_err(|e| format!("transport: {e}"))?;
-
-    let cred = kms_sys::peer::peer_credentials(&stream).map_err(|e| e.to_string())?;
     let expected_uid = cfg.peer_uid.unwrap_or_else(kms_sys::peer::current_uid);
-    if cred.uid != expected_uid {
-        return Err(format!(
-            "peer uid {} does not match expected uid {expected_uid}",
-            cred.uid
-        ));
-    }
+    let (mut stream, cred) =
+        transport::acquire(&cfg.transport, expected_uid).map_err(|e| format!("transport: {e}"))?;
 
     let root = match &cfg.root {
         RootSource::File(path) => {
@@ -79,7 +84,7 @@ fn serve(cfg: &Config) -> Result<(), String> {
 
     let engine = Engine::new(root, cfg.pqc);
     log(&format!(
-        "serving peer pid {} (fips={}, pqc={})",
+        "{VERSION} serving peer pid {} (fips={}, pqc={})",
         cred.pid.map_or_else(|| "?".to_owned(), |p| p.to_string()),
         Engine::fips_mode(),
         engine.pqc_available()

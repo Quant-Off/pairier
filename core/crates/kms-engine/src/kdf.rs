@@ -21,14 +21,18 @@ pub(crate) struct DerivedAead {
     pub(crate) nonce: Nonce,
 }
 
+pub(crate) fn expand(salt: &[u8], ikm: &[u8], info: &[&[u8]], out: &mut [u8]) -> Result<(), Error> {
+    let prk = Salt::new(HKDF_SHA256, salt).extract(ikm);
+    prk.expand(info, OkmLen(out.len()))
+        .map_err(|_| Error::Internal)?
+        .fill(out)
+        .map_err(|_| Error::Internal)
+}
+
 pub(crate) fn derive_aead(ikm: &[u8], salt: &[u8], info: &[&[u8]]) -> Result<DerivedAead, Error> {
     const OKM_LEN: usize = KEY_LEN + NONCE_LEN;
-    let prk = Salt::new(HKDF_SHA256, salt).extract(ikm);
     let mut okm = Zeroizing::new([0u8; OKM_LEN]);
-    prk.expand(info, OkmLen(OKM_LEN))
-        .map_err(|_| Error::Internal)?
-        .fill(okm.as_mut_slice())
-        .map_err(|_| Error::Internal)?;
+    expand(salt, ikm, info, okm.as_mut_slice())?;
     let (key_bytes, nonce_bytes) = okm.split_at(KEY_LEN);
     let key = UnboundKey::new(&AES_256_GCM, key_bytes).map_err(|_| Error::Internal)?;
     let nonce = Nonce::try_assume_unique_for_key(nonce_bytes).map_err(|_| Error::Internal)?;

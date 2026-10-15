@@ -91,10 +91,13 @@ pub enum Op {
     Hello = 0x0001,
     Ping = 0x0002,
     KeyGenerate = 0x0010,
+    KeyInspect = 0x0011,
     AeadEncrypt = 0x0020,
     AeadDecrypt = 0x0021,
     Sign = 0x0022,
     Verify = 0x0023,
+    KeyExport = 0x0030,
+    KeyImport = 0x0031,
     Random = 0x0040,
 }
 
@@ -104,10 +107,13 @@ impl From<Op> for u16 {
             Op::Hello => 0x0001,
             Op::Ping => 0x0002,
             Op::KeyGenerate => 0x0010,
+            Op::KeyInspect => 0x0011,
             Op::AeadEncrypt => 0x0020,
             Op::AeadDecrypt => 0x0021,
             Op::Sign => 0x0022,
             Op::Verify => 0x0023,
+            Op::KeyExport => 0x0030,
+            Op::KeyImport => 0x0031,
             Op::Random => 0x0040,
         }
     }
@@ -121,10 +127,13 @@ impl TryFrom<u16> for Op {
             0x0001 => Ok(Self::Hello),
             0x0002 => Ok(Self::Ping),
             0x0010 => Ok(Self::KeyGenerate),
+            0x0011 => Ok(Self::KeyInspect),
             0x0020 => Ok(Self::AeadEncrypt),
             0x0021 => Ok(Self::AeadDecrypt),
             0x0022 => Ok(Self::Sign),
             0x0023 => Ok(Self::Verify),
+            0x0030 => Ok(Self::KeyExport),
+            0x0031 => Ok(Self::KeyImport),
             0x0040 => Ok(Self::Random),
             _ => Err(Error::UnknownOp),
         }

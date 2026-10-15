@@ -12,17 +12,21 @@ const (
 	MaxCiphertext = MaxPlaintext + 64
 	MaxMessage    = 64 * 1024
 	MaxRandom     = 1024
+	MaxContext    = 1024
+	MaxPackage    = 8 * 1024
 )
 
 const (
-	AlgAES256GCM       uint16 = 0x0001
-	AlgECDSAP256SHA256 uint16 = 0x0010
-	AlgECDSAP384SHA384 uint16 = 0x0011
-	AlgEd25519         uint16 = 0x0020
-	AlgMLDSA65         uint16 = 0x0100
-	AlgMLDSA87         uint16 = 0x0101
-	AlgMLKEM768        uint16 = 0x0200
-	AlgMLKEM1024       uint16 = 0x0201
+	AlgAES256GCM          uint16 = 0x0001
+	AlgECDSAP256SHA256    uint16 = 0x0010
+	AlgECDSAP384SHA384    uint16 = 0x0011
+	AlgEd25519            uint16 = 0x0020
+	AlgDHKEMP256          uint16 = 0x0030
+	AlgMLDSA65            uint16 = 0x0100
+	AlgMLDSA87            uint16 = 0x0101
+	AlgMLKEM768           uint16 = 0x0200
+	AlgMLKEM1024          uint16 = 0x0201
+	AlgHybridP256MLKEM768 uint16 = 0x0210
 )
 
 const (
@@ -34,7 +38,8 @@ const (
 	UsageUnwrap      uint32 = 1 << 5
 	UsageDerive      uint32 = 1 << 6
 	UsageDecapsulate uint32 = 1 << 7
-	UsageAll         uint32 = (1 << 8) - 1
+	UsageExport      uint32 = 1 << 8
+	UsageAll         uint32 = (1 << 9) - 1
 )
 
 const (
@@ -352,6 +357,166 @@ func (m *RandomResponse) Decode(r *Reader) (err error) {
 	return err
 }
 
+type KeyInspectRequest struct {
+	KeyBlob []byte
+}
+
+func (*KeyInspectRequest) Op() Op { return OpKeyInspect }
+
+func (m *KeyInspectRequest) Encode(w *Writer) { w.Bytes(m.KeyBlob) }
+
+func (m *KeyInspectRequest) Decode(r *Reader) (err error) {
+	m.KeyBlob, err = r.Bytes(MaxKeyBlob)
+	return err
+}
+
+type KeyInspectResponse struct {
+	Alg       uint16
+	Usage     uint32
+	KeyID     [KeyIDLen]byte
+	Label     string
+	PublicKey []byte
+}
+
+func (*KeyInspectResponse) Op() Op { return OpKeyInspect }
+
+func (m *KeyInspectResponse) Encode(w *Writer) {
+	w.U16(m.Alg)
+	w.U32(m.Usage)
+	w.Bytes(m.KeyID[:])
+	w.String(m.Label)
+	w.Bytes(m.PublicKey)
+}
+
+func (m *KeyInspectResponse) Decode(r *Reader) (err error) {
+	if m.Alg, err = r.U16(); err != nil {
+		return err
+	}
+	if m.Usage, err = r.U32(); err != nil {
+		return err
+	}
+	id, err := r.Array(KeyIDLen)
+	if err != nil {
+		return err
+	}
+	copy(m.KeyID[:], id)
+	if m.Label, err = r.String(MaxLabel); err != nil {
+		return err
+	}
+	m.PublicKey, err = r.Bytes(MaxPublicKey)
+	return err
+}
+
+type KeyExportRequest struct {
+	KeyBlob            []byte
+	KemAlg             uint16
+	RecipientPublicKey []byte
+	Usage              uint32
+	Context            []byte
+}
+
+func (*KeyExportRequest) Op() Op { return OpKeyExport }
+
+func (m *KeyExportRequest) Encode(w *Writer) {
+	w.Bytes(m.KeyBlob)
+	w.U16(m.KemAlg)
+	w.Bytes(m.RecipientPublicKey)
+	w.U32(m.Usage)
+	w.Bytes(m.Context)
+}
+
+func (m *KeyExportRequest) Decode(r *Reader) (err error) {
+	if m.KeyBlob, err = r.Bytes(MaxKeyBlob); err != nil {
+		return err
+	}
+	if m.KemAlg, err = r.U16(); err != nil {
+		return err
+	}
+	if m.RecipientPublicKey, err = r.Bytes(MaxPublicKey); err != nil {
+		return err
+	}
+	if m.Usage, err = r.U32(); err != nil {
+		return err
+	}
+	m.Context, err = r.Bytes(MaxContext)
+	return err
+}
+
+type KeyExportResponse struct {
+	Package []byte
+}
+
+func (*KeyExportResponse) Op() Op { return OpKeyExport }
+
+func (m *KeyExportResponse) Encode(w *Writer) { w.Bytes(m.Package) }
+
+func (m *KeyExportResponse) Decode(r *Reader) (err error) {
+	m.Package, err = r.Bytes(MaxPackage)
+	return err
+}
+
+type KeyImportRequest struct {
+	KemKeyBlob []byte
+	Package    []byte
+	Context    []byte
+}
+
+func (*KeyImportRequest) Op() Op { return OpKeyImport }
+
+func (m *KeyImportRequest) Encode(w *Writer) {
+	w.Bytes(m.KemKeyBlob)
+	w.Bytes(m.Package)
+	w.Bytes(m.Context)
+}
+
+func (m *KeyImportRequest) Decode(r *Reader) (err error) {
+	if m.KemKeyBlob, err = r.Bytes(MaxKeyBlob); err != nil {
+		return err
+	}
+	if m.Package, err = r.Bytes(MaxPackage); err != nil {
+		return err
+	}
+	m.Context, err = r.Bytes(MaxContext)
+	return err
+}
+
+type KeyImportResponse struct {
+	KeyID   [KeyIDLen]byte
+	KeyBlob []byte
+	Alg     uint16
+	Usage   uint32
+	Label   string
+}
+
+func (*KeyImportResponse) Op() Op { return OpKeyImport }
+
+func (m *KeyImportResponse) Encode(w *Writer) {
+	w.Bytes(m.KeyID[:])
+	w.Bytes(m.KeyBlob)
+	w.U16(m.Alg)
+	w.U32(m.Usage)
+	w.String(m.Label)
+}
+
+func (m *KeyImportResponse) Decode(r *Reader) (err error) {
+	id, err := r.Array(KeyIDLen)
+	if err != nil {
+		return err
+	}
+	copy(m.KeyID[:], id)
+	if m.KeyBlob, err = r.Bytes(MaxKeyBlob); err != nil {
+		return err
+	}
+	if m.Alg, err = r.U16(); err != nil {
+		return err
+	}
+	if m.Usage, err = r.U32(); err != nil {
+		return err
+	}
+	m.Label, err = r.String(MaxLabel)
+	return err
+}
+
 func NewMessage(op Op, kind Kind) Message {
 	switch kind {
 	case KindRequest:
@@ -362,6 +527,12 @@ func NewMessage(op Op, kind Kind) Message {
 			return &PingRequest{}
 		case OpKeyGenerate:
 			return &KeyGenerateRequest{}
+		case OpKeyInspect:
+			return &KeyInspectRequest{}
+		case OpKeyExport:
+			return &KeyExportRequest{}
+		case OpKeyImport:
+			return &KeyImportRequest{}
 		case OpAeadEncrypt:
 			return &AeadEncryptRequest{}
 		case OpAeadDecrypt:
@@ -381,6 +552,12 @@ func NewMessage(op Op, kind Kind) Message {
 			return &PingResponse{}
 		case OpKeyGenerate:
 			return &KeyGenerateResponse{}
+		case OpKeyInspect:
+			return &KeyInspectResponse{}
+		case OpKeyExport:
+			return &KeyExportResponse{}
+		case OpKeyImport:
+			return &KeyImportResponse{}
 		case OpAeadEncrypt:
 			return &AeadEncryptResponse{}
 		case OpAeadDecrypt:
