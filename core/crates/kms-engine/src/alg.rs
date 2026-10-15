@@ -56,6 +56,11 @@ impl Alg {
     }
 
     #[must_use]
+    pub fn is_retired(self) -> bool {
+        matches!(self, Self::HybridP256MlKem768)
+    }
+
+    #[must_use]
     pub fn wire_id(self) -> u16 {
         match self {
             Self::Aes256Gcm => wire::AES_256_GCM,

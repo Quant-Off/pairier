@@ -37,6 +37,7 @@ var (
 	ErrSenderMismatch  = errors.New("node: envelope sender differs from the authenticated peer")
 	ErrInboxFull       = errors.New("node: too many pending envelopes from this sender")
 	ErrLabel           = errors.New("node: label contains control or bidirectional formatting characters")
+	ErrRetiredKEM      = errors.New("node: member card uses a retired kem, the member must renew the card")
 )
 
 const auditTimeout = 10 * time.Second
@@ -495,6 +496,9 @@ func (n *Node) send(ctx context.Context, keyID, to string, usage uint32) ([]byte
 	card, err := n.Member(ctx, to)
 	if err != nil {
 		return nil, err
+	}
+	if exchange.IsRetiredKemAlg(card.KemAlg) {
+		return nil, ErrRetiredKEM
 	}
 	ectx, err := exchange.NewContext(n.info.MemberID, to, n.opts.now())
 	if err != nil {

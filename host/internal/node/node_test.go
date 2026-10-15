@@ -403,6 +403,27 @@ func TestPQCNodes(t *testing.T) {
 	if _, err := bob.Receive(ctx, env); err != nil {
 		t.Fatal(err)
 	}
+	carol, _ := initNode(t, "carol", true)
+	legacy := &exchange.Card{
+		MemberID:          "carol",
+		IdentityAlg:       carol.identity.Alg,
+		IdentityPublicKey: carol.identity.PublicKey,
+		KemAlg:            wire.AlgHybridP256MLKEM768,
+		KemPublicKey:      bytes.Repeat([]byte{4}, 1249),
+		TLSPublicKey:      carol.TLSPublicKey(),
+		CreatedAt:         uint64(carol.info.CreatedAt),
+	}
+	if err := exchange.SignCard(ctx, carol.core, carol.identity.Blob, legacy); err != nil {
+		t.Fatal(err)
+	}
+	rawLegacy, _ := legacy.Encode()
+	fpLegacy, _ := legacy.Fingerprint()
+	if _, err := alice.AddMember(ctx, rawLegacy, fpLegacy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.Send(ctx, k.KeyID, "carol", wire.UsageDecrypt); !errors.Is(err, ErrRetiredKEM) {
+		t.Fatalf("send to a retired kem card: %v", err)
+	}
 	classic, _ := initNode(t, "dave", false)
 	_, rawA, _ := alice.Card(ctx)
 	fp, _ := card.Fingerprint()

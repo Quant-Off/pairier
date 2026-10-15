@@ -136,6 +136,10 @@ func IsKemAlg(alg uint16) bool {
 	}
 }
 
+func IsRetiredKemAlg(alg uint16) bool {
+	return alg == wire.AlgHybridP256MLKEM768
+}
+
 func IsPQCAlg(alg uint16) bool {
 	switch alg {
 	case wire.AlgMLDSA65, wire.AlgMLDSA87, wire.AlgMLKEM768, wire.AlgMLKEM1024, wire.AlgHybridP256MLKEM768, wire.AlgMLKEM768P256:

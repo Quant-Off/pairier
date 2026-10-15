@@ -93,8 +93,16 @@ impl Engine {
         Ok(())
     }
 
-    pub fn generate_key(&self, alg: Alg, usage: Usage, label: &str) -> Result<GeneratedKey, Error> {
+    fn check_current(&self, alg: Alg) -> Result<(), Error> {
         self.check_enabled(alg)?;
+        if alg.is_retired() {
+            return Err(Error::UnsupportedAlgorithm);
+        }
+        Ok(())
+    }
+
+    pub fn generate_key(&self, alg: Alg, usage: Usage, label: &str) -> Result<GeneratedKey, Error> {
+        self.check_current(alg)?;
         usage.check_for(alg)?;
         blob::check_label(label)?;
         let mut key_id = [0u8; KEY_ID_LEN];
@@ -215,7 +223,7 @@ impl Engine {
         alg: Alg,
         encapsulation_key: &[u8],
     ) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>), Error> {
-        self.check_enabled(alg)?;
+        self.check_current(alg)?;
         if alg.kind() != AlgKind::Kem {
             return Err(Error::InvalidArgument);
         }
@@ -230,7 +238,7 @@ impl Engine {
         usage: Usage,
         context: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        self.check_enabled(kem_alg)?;
+        self.check_current(kem_alg)?;
         if kem_alg.kind() != AlgKind::Kem {
             return Err(Error::InvalidArgument);
         }
@@ -503,12 +511,7 @@ mod tests {
     #[test]
     fn pqc_kems_follow_capability() {
         let e = engine();
-        for alg in [
-            Alg::MlKem768,
-            Alg::MlKem1024,
-            Alg::HybridP256MlKem768,
-            Alg::MlKem768P256,
-        ] {
+        for alg in [Alg::MlKem768, Alg::MlKem1024, Alg::MlKem768P256] {
             if cfg!(feature = "pqc") {
                 kem_roundtrip(&e, alg);
             } else {
@@ -528,6 +531,53 @@ mod tests {
             off.encapsulate(Alg::HybridP256MlKem768, &[0u8; 1249]),
             Err(Error::CapabilityDisabled)
         );
+    }
+
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn retired_hybrid_opens_but_never_seals() {
+        let e = engine();
+        let decap = Usage::from_bits(usage::DECAPSULATE).unwrap();
+        let legacy = Alg::HybridP256MlKem768;
+        assert_eq!(
+            e.generate_key(legacy, decap, "").unwrap_err(),
+            Error::UnsupportedAlgorithm
+        );
+        let (secret, public_key) = super::kem::generate(legacy).unwrap();
+        let header = super::blob::Header {
+            alg: legacy,
+            usage: decap,
+            key_id: [7u8; 16],
+            label: "kem/legacy",
+        };
+        let kem_blob = super::blob::seal(&e.root, &header, &secret).unwrap();
+        assert_eq!(e.inspect(&kem_blob).unwrap().public_key, public_key);
+        assert_eq!(
+            e.encapsulate(legacy, &public_key),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        let full = Usage::from_bits(usage::DECRYPT | usage::EXPORT).unwrap();
+        let k = e.generate_key(Alg::Aes256Gcm, full, "shared").unwrap();
+        let grant = Usage::from_bits(usage::DECRYPT).unwrap();
+        assert_eq!(
+            e.export_key(&k.blob, legacy, &public_key, grant, b"ctx"),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        let opened = e
+            .open_for(&k.blob, super::AlgKind::Symmetric, usage::EXPORT)
+            .unwrap();
+        let pending = super::export::Export {
+            kem_alg: legacy,
+            alg: Alg::Aes256Gcm,
+            usage: grant,
+            key_id: opened.key_id,
+            label: "shared",
+            context: b"ctx",
+        };
+        let pkg = super::export::seal(&pending, &public_key, &opened.secret).unwrap();
+        let imp = e.import_key(&kem_blob, &pkg, b"ctx").unwrap();
+        assert_eq!(imp.key_id, k.key_id);
+        assert_eq!(imp.usage, grant);
     }
 
     fn exchange_roundtrip(sender: &Engine, recipient: &Engine, kem_alg: Alg) {
@@ -623,12 +673,7 @@ mod tests {
     fn export_import_pqc() {
         let a = engine();
         let b = engine();
-        for alg in [
-            Alg::MlKem768,
-            Alg::MlKem1024,
-            Alg::HybridP256MlKem768,
-            Alg::MlKem768P256,
-        ] {
+        for alg in [Alg::MlKem768, Alg::MlKem1024, Alg::MlKem768P256] {
             exchange_roundtrip(&a, &b, alg);
         }
     }
