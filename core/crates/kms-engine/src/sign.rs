@@ -58,7 +58,8 @@ pub(crate) fn generate(alg: Alg) -> Result<Generated, Error> {
         | Alg::DhkemP256
         | Alg::MlKem768
         | Alg::MlKem1024
-        | Alg::HybridP256MlKem768 => Err(Error::InvalidArgument),
+        | Alg::HybridP256MlKem768
+        | Alg::MlKem768P256 => Err(Error::InvalidArgument),
     }
 }
 
@@ -93,7 +94,8 @@ pub(crate) fn public_key(alg: Alg, pkcs8: &[u8]) -> Result<Vec<u8>, Error> {
         | Alg::DhkemP256
         | Alg::MlKem768
         | Alg::MlKem1024
-        | Alg::HybridP256MlKem768 => Err(Error::InvalidArgument),
+        | Alg::HybridP256MlKem768
+        | Alg::MlKem768P256 => Err(Error::InvalidArgument),
     }
 }
 
@@ -137,7 +139,8 @@ pub(crate) fn sign(alg: Alg, pkcs8: &[u8], message: &[u8]) -> Result<Vec<u8>, Er
         | Alg::DhkemP256
         | Alg::MlKem768
         | Alg::MlKem1024
-        | Alg::HybridP256MlKem768 => Err(Error::InvalidArgument),
+        | Alg::HybridP256MlKem768
+        | Alg::MlKem768P256 => Err(Error::InvalidArgument),
     }
 }
 
@@ -164,7 +167,8 @@ pub(crate) fn verify(
         | Alg::DhkemP256
         | Alg::MlKem768
         | Alg::MlKem1024
-        | Alg::HybridP256MlKem768 => return Err(Error::InvalidArgument),
+        | Alg::HybridP256MlKem768
+        | Alg::MlKem768P256 => return Err(Error::InvalidArgument),
     };
     Ok(UnparsedPublicKey::new(va, public_key)
         .verify(message, signature)

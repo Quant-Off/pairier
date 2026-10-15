@@ -503,7 +503,12 @@ mod tests {
     #[test]
     fn pqc_kems_follow_capability() {
         let e = engine();
-        for alg in [Alg::MlKem768, Alg::MlKem1024, Alg::HybridP256MlKem768] {
+        for alg in [
+            Alg::MlKem768,
+            Alg::MlKem1024,
+            Alg::HybridP256MlKem768,
+            Alg::MlKem768P256,
+        ] {
             if cfg!(feature = "pqc") {
                 kem_roundtrip(&e, alg);
             } else {
@@ -618,7 +623,12 @@ mod tests {
     fn export_import_pqc() {
         let a = engine();
         let b = engine();
-        for alg in [Alg::MlKem768, Alg::MlKem1024, Alg::HybridP256MlKem768] {
+        for alg in [
+            Alg::MlKem768,
+            Alg::MlKem1024,
+            Alg::HybridP256MlKem768,
+            Alg::MlKem768P256,
+        ] {
             exchange_roundtrip(&a, &b, alg);
         }
     }

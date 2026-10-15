@@ -14,6 +14,7 @@ pub enum Alg {
     MlKem768,
     MlKem1024,
     HybridP256MlKem768,
+    MlKem768P256,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,9 +34,11 @@ impl Alg {
             | Self::Ed25519
             | Self::MlDsa65
             | Self::MlDsa87 => AlgKind::Signature,
-            Self::DhkemP256 | Self::MlKem768 | Self::MlKem1024 | Self::HybridP256MlKem768 => {
-                AlgKind::Kem
-            }
+            Self::DhkemP256
+            | Self::MlKem768
+            | Self::MlKem1024
+            | Self::HybridP256MlKem768
+            | Self::MlKem768P256 => AlgKind::Kem,
         }
     }
 
@@ -48,6 +51,7 @@ impl Alg {
                 | Self::MlKem768
                 | Self::MlKem1024
                 | Self::HybridP256MlKem768
+                | Self::MlKem768P256
         )
     }
 
@@ -64,6 +68,7 @@ impl Alg {
             Self::MlKem768 => wire::ML_KEM_768,
             Self::MlKem1024 => wire::ML_KEM_1024,
             Self::HybridP256MlKem768 => wire::HYBRID_P256_ML_KEM_768,
+            Self::MlKem768P256 => wire::ML_KEM_768_P256,
         }
     }
 
@@ -78,7 +83,7 @@ impl Alg {
             Self::MlDsa87 => Some(2592),
             Self::MlKem768 => Some(1184),
             Self::MlKem1024 => Some(1568),
-            Self::HybridP256MlKem768 => Some(1249),
+            Self::HybridP256MlKem768 | Self::MlKem768P256 => Some(1249),
         }
     }
 
@@ -93,7 +98,8 @@ impl Alg {
             | Self::DhkemP256
             | Self::MlKem768
             | Self::MlKem1024
-            | Self::HybridP256MlKem768 => None,
+            | Self::HybridP256MlKem768
+            | Self::MlKem768P256 => None,
         }
     }
 
@@ -103,7 +109,7 @@ impl Alg {
             Self::DhkemP256 => Some(65),
             Self::MlKem768 => Some(1088),
             Self::MlKem1024 => Some(1568),
-            Self::HybridP256MlKem768 => Some(1153),
+            Self::HybridP256MlKem768 | Self::MlKem768P256 => Some(1153),
             Self::Aes256Gcm
             | Self::EcdsaP256Sha256
             | Self::EcdsaP384Sha384
@@ -129,6 +135,7 @@ impl TryFrom<u16> for Alg {
             wire::ML_KEM_768 => Ok(Self::MlKem768),
             wire::ML_KEM_1024 => Ok(Self::MlKem1024),
             wire::HYBRID_P256_ML_KEM_768 => Ok(Self::HybridP256MlKem768),
+            wire::ML_KEM_768_P256 => Ok(Self::MlKem768P256),
             _ => Err(Error::UnsupportedAlgorithm),
         }
     }

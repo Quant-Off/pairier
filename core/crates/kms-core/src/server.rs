@@ -527,7 +527,7 @@ mod tests {
         hello(&mut a);
         hello(&mut b);
         let kem_alg = if cfg!(feature = "pqc") {
-            alg::HYBRID_P256_ML_KEM_768
+            alg::ML_KEM_768_P256
         } else {
             alg::DHKEM_P256
         };

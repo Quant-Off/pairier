@@ -23,6 +23,7 @@ pub mod alg {
     pub const ML_KEM_768: u16 = 0x0200;
     pub const ML_KEM_1024: u16 = 0x0201;
     pub const HYBRID_P256_ML_KEM_768: u16 = 0x0210;
+    pub const ML_KEM_768_P256: u16 = 0x0211;
 }
 
 pub mod usage {

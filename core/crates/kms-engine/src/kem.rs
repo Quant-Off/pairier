@@ -1,4 +1,6 @@
 use aws_lc_rs::agreement::{self, ECDH_P256, PrivateKey, UnparsedPublicKey};
+#[cfg(feature = "pqc")]
+use aws_lc_rs::digest::{Context, SHA3_256};
 use aws_lc_rs::encoding::{AsBigEndian, EcPrivateKeyBin};
 #[cfg(feature = "pqc")]
 use aws_lc_rs::kem::{
@@ -17,6 +19,8 @@ const DHKEM_P256_SUITE_ID: [u8; 5] = [b'K', b'E', b'M', 0x00, 0x10];
 const HPKE_VERSION: &[u8] = b"HPKE-v1";
 #[cfg(feature = "pqc")]
 const HYBRID_SALT: &[u8] = b"pairier/kms/hybrid-kem/v1";
+#[cfg(feature = "pqc")]
+const MLKEM768_P256_LABEL: &[u8] = b"MLKEM768-P256";
 #[cfg(feature = "pqc")]
 const ML_KEM_768_PUBLIC_LEN: usize = 1184;
 #[cfg(feature = "pqc")]
@@ -47,8 +51,12 @@ pub(crate) fn generate(alg: Alg) -> Result<Generated, Error> {
         Alg::MlKem1024 => mlkem_generate(&ML_KEM_1024),
         #[cfg(feature = "pqc")]
         Alg::HybridP256MlKem768 => hybrid_generate(),
+        #[cfg(feature = "pqc")]
+        Alg::MlKem768P256 => mlkem768p256_generate(),
         #[cfg(not(feature = "pqc"))]
-        Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 => Err(Error::CapabilityDisabled),
+        Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 | Alg::MlKem768P256 => {
+            Err(Error::CapabilityDisabled)
+        }
         Alg::Aes256Gcm
         | Alg::EcdsaP256Sha256
         | Alg::EcdsaP384Sha384
@@ -90,8 +98,19 @@ pub(crate) fn public_key(alg: Alg, secret: &[u8]) -> Result<Vec<u8>, Error> {
             out.extend_from_slice(&public_key(Alg::MlKem768, ml_sk)?);
             Ok(out)
         }
+        #[cfg(feature = "pqc")]
+        Alg::MlKem768P256 => {
+            let (dh_sk, ml_sk) = secret
+                .split_at_checked(P256_SECRET_LEN)
+                .ok_or(Error::InvalidKeyBlob)?;
+            let mut out = public_key(Alg::MlKem768, ml_sk)?;
+            out.extend_from_slice(&public_key(Alg::DhkemP256, dh_sk)?);
+            Ok(out)
+        }
         #[cfg(not(feature = "pqc"))]
-        Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 => Err(Error::CapabilityDisabled),
+        Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 | Alg::MlKem768P256 => {
+            Err(Error::CapabilityDisabled)
+        }
         Alg::Aes256Gcm
         | Alg::EcdsaP256Sha256
         | Alg::EcdsaP384Sha384
@@ -113,8 +132,12 @@ pub(crate) fn encapsulate(alg: Alg, public_key: &[u8]) -> Result<Encapsulated, E
         Alg::MlKem1024 => mlkem_encapsulate(&ML_KEM_1024, public_key),
         #[cfg(feature = "pqc")]
         Alg::HybridP256MlKem768 => hybrid_encapsulate(public_key),
+        #[cfg(feature = "pqc")]
+        Alg::MlKem768P256 => mlkem768p256_encapsulate(public_key),
         #[cfg(not(feature = "pqc"))]
-        Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 => Err(Error::CapabilityDisabled),
+        Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 | Alg::MlKem768P256 => {
+            Err(Error::CapabilityDisabled)
+        }
         Alg::Aes256Gcm
         | Alg::EcdsaP256Sha256
         | Alg::EcdsaP384Sha384
@@ -136,8 +159,12 @@ pub(crate) fn decapsulate(alg: Alg, secret: &[u8], ciphertext: &[u8]) -> Result<
         Alg::MlKem1024 => mlkem_decapsulate(&ML_KEM_1024, secret, ciphertext),
         #[cfg(feature = "pqc")]
         Alg::HybridP256MlKem768 => hybrid_decapsulate(secret, ciphertext),
+        #[cfg(feature = "pqc")]
+        Alg::MlKem768P256 => mlkem768p256_decapsulate(secret, ciphertext),
         #[cfg(not(feature = "pqc"))]
-        Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 => Err(Error::CapabilityDisabled),
+        Alg::MlKem768 | Alg::MlKem1024 | Alg::HybridP256MlKem768 | Alg::MlKem768P256 => {
+            Err(Error::CapabilityDisabled)
+        }
         Alg::Aes256Gcm
         | Alg::EcdsaP256Sha256
         | Alg::EcdsaP384Sha384
@@ -338,6 +365,61 @@ fn hybrid_decapsulate(secret: &[u8], ciphertext: &[u8]) -> Result<Secret, Error>
     hybrid_combine(&ss_dh, &ss_ml, enc_dh, ct_ml, &dh_public, ml_public)
 }
 
+#[cfg(feature = "pqc")]
+fn mlkem768p256_combine(ss_pq: &[u8], ss_t: &[u8], ct_t: &[u8], pk_t: &[u8]) -> Secret {
+    let mut h = Context::new(&SHA3_256);
+    h.update(ss_pq);
+    h.update(ss_t);
+    h.update(ct_t);
+    h.update(pk_t);
+    h.update(MLKEM768_P256_LABEL);
+    Zeroizing::new(h.finish().as_ref().to_vec())
+}
+
+#[cfg(feature = "pqc")]
+fn mlkem768p256_generate() -> Result<Generated, Error> {
+    let (dh_secret, dh_public) = dhkem_generate()?;
+    let (ml_secret, ml_public) = mlkem_generate(&ML_KEM_768)?;
+    let mut secret = Zeroizing::new(Vec::new());
+    secret.extend_from_slice(&dh_secret);
+    secret.extend_from_slice(&ml_secret);
+    let mut public = ml_public;
+    public.extend_from_slice(&dh_public);
+    Ok((secret, public))
+}
+
+#[cfg(feature = "pqc")]
+fn mlkem768p256_encapsulate(public_key: &[u8]) -> Result<Encapsulated, Error> {
+    let (ek_pq, pk_t) = public_key
+        .split_at_checked(ML_KEM_768_PUBLIC_LEN)
+        .ok_or(Error::InvalidArgument)?;
+    let sk_e = PrivateKey::generate(&ECDH_P256).map_err(|_| Error::Internal)?;
+    let ss_t = p256_dh(&sk_e, pk_t, Error::InvalidArgument)?;
+    let ct_t = p256_public(&sk_e)?;
+    let (mut ct, ss_pq) = mlkem_encapsulate(&ML_KEM_768, ek_pq)?;
+    let ss = mlkem768p256_combine(&ss_pq, &ss_t, &ct_t, pk_t);
+    ct.extend_from_slice(&ct_t);
+    Ok((ct, ss))
+}
+
+#[cfg(feature = "pqc")]
+fn mlkem768p256_decapsulate(secret: &[u8], ciphertext: &[u8]) -> Result<Secret, Error> {
+    let (dh_sk, ml_sk) = secret
+        .split_at_checked(P256_SECRET_LEN)
+        .ok_or(Error::InvalidKeyBlob)?;
+    if ml_sk.len() != ML_KEM_768_SECRET_LEN {
+        return Err(Error::InvalidKeyBlob);
+    }
+    let (ct_pq, ct_t) = ciphertext
+        .split_at_checked(ML_KEM_768_CIPHERTEXT_LEN)
+        .ok_or(Error::CryptoFailure)?;
+    let sk = PrivateKey::from_private_key(&ECDH_P256, dh_sk).map_err(|_| Error::InvalidKeyBlob)?;
+    let ss_pq = mlkem_decapsulate(&ML_KEM_768, ml_sk, ct_pq)?;
+    let ss_t = p256_dh(&sk, ct_t, Error::CryptoFailure)?;
+    let pk_t = p256_public(&sk)?;
+    Ok(mlkem768p256_combine(&ss_pq, &ss_t, ct_t, &pk_t))
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -396,6 +478,57 @@ mod tests {
             super::hybrid_decapsulate(&sk, &swapped).unwrap().as_slice(),
             ss.as_slice()
         );
+    }
+
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn mlkem768p256_combiner_matches_reference() {
+        let ss = super::mlkem768p256_combine(&[1u8; 32], &[2u8; 32], &[3u8; 65], &[4u8; 65]);
+        assert_eq!(
+            ss.as_slice(),
+            unhex("da20e05a6f6067742e54bcc311a1827e1b11798f61cc982a2db075d6d0261692").as_slice()
+        );
+    }
+
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn mlkem768p256_layout_and_roundtrip() {
+        let (sk, pk) = super::mlkem768p256_generate().unwrap();
+        assert_eq!(sk.len(), 32 + 2400);
+        assert_eq!(pk.len(), 1184 + 65);
+        assert_eq!(pk[1184], 0x04);
+        assert_eq!(
+            super::public_key(super::Alg::MlKem768P256, &sk).unwrap(),
+            pk
+        );
+        assert_eq!(&pk[..1184], super::mlkem768_public(&sk[32..]).unwrap());
+        let (ct, ss) = super::mlkem768p256_encapsulate(&pk).unwrap();
+        assert_eq!(ct.len(), 1088 + 65);
+        assert_eq!(ct[1088], 0x04);
+        assert_eq!(ss.len(), 32);
+        assert_eq!(
+            super::mlkem768p256_decapsulate(&sk, &ct)
+                .unwrap()
+                .as_slice(),
+            ss.as_slice()
+        );
+        let mut bad_pq = ct.clone();
+        bad_pq[10] ^= 1;
+        assert_ne!(
+            super::mlkem768p256_decapsulate(&sk, &bad_pq)
+                .unwrap()
+                .as_slice(),
+            ss.as_slice()
+        );
+        let mut bad_t = ct.clone();
+        bad_t[1100] ^= 1;
+        assert_eq!(
+            super::mlkem768p256_decapsulate(&sk, &bad_t).unwrap_err(),
+            Error::CryptoFailure
+        );
+        let mut swapped = pk[1184..].to_vec();
+        swapped.extend_from_slice(&pk[..1184]);
+        assert!(super::mlkem768p256_encapsulate(&swapped).is_err());
     }
 
     #[test]
