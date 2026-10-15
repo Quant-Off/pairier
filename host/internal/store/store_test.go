@@ -207,3 +207,68 @@ func TestMembersNodeAndInbox(t *testing.T) {
 		t.Fatalf("stale temp file confused listing: %v %v", list, err)
 	}
 }
+
+func TestReplaceIsAtomicAndNeedsAnExistingRecord(t *testing.T) {
+	s := newStore(t)
+	m := &MemberRecord{MemberID: "bob", Card: []byte("old"), Fingerprint: "fp1", AddedAt: 1}
+	if err := s.ReplaceMember(m); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("replace of a missing member: %v", err)
+	}
+	if err := s.PutMember(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceMember(&MemberRecord{MemberID: "bob", Card: []byte("new"), Fingerprint: "fp2", AddedAt: 2}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetMember("bob")
+	if err != nil || string(got.Card) != "new" || got.Fingerprint != "fp2" {
+		t.Fatalf("member after replace: %+v %v", got, err)
+	}
+	if err := s.ReplaceMember(&MemberRecord{MemberID: "../bob"}); !errors.Is(err, ErrBadID) {
+		t.Fatalf("bad id accepted: %v", err)
+	}
+	path := filepath.Join(s.Dir(), "members", "bob.json")
+	fi, err := os.Lstat(path)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("replaced file mode: %v %v", fi.Mode(), err)
+	}
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceMember(m); !errors.Is(err, ErrInsecure) {
+		t.Fatalf("symlink replaced: %v", err)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "{}" {
+		t.Fatalf("symlink target changed: %q", b)
+	}
+	n := &Node{MemberID: "alice", IdentityKeyID: KeyIDString([16]byte{1}), KemKeyID: KeyIDString([16]byte{2}), AuditKeyID: KeyIDString([16]byte{3})}
+	if err := s.ReplaceNode(n); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("replace of a missing node: %v", err)
+	}
+	if err := s.PutNode(n); err != nil {
+		t.Fatal(err)
+	}
+	n.KemKeyID = KeyIDString([16]byte{4})
+	if err := s.ReplaceNode(n); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetNode(); err != nil || got.KemKeyID != n.KemKeyID {
+		t.Fatalf("node after replace: %+v %v", got, err)
+	}
+	n.KemKeyID = n.IdentityKeyID
+	if err := s.ReplaceNode(n); !errors.Is(err, ErrBadID) {
+		t.Fatalf("invalid node accepted: %v", err)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(s.Dir(), "*", ".*.tmp"))
+	top, _ := filepath.Glob(filepath.Join(s.Dir(), ".*.tmp"))
+	if len(leftovers)+len(top) != 0 {
+		t.Fatalf("temp files left behind: %v %v", leftovers, top)
+	}
+}

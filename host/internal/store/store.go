@@ -270,6 +270,13 @@ func (s *Store) PutMember(m *MemberRecord) error {
 	return s.writeNew(filepath.Join(membersDir, m.MemberID+".json"), m)
 }
 
+func (s *Store) ReplaceMember(m *MemberRecord) error {
+	if !ValidMemberID(m.MemberID) {
+		return ErrBadID
+	}
+	return s.replace(filepath.Join(membersDir, m.MemberID+".json"), m)
+}
+
 func (s *Store) GetMember(id string) (*MemberRecord, error) {
 	if !ValidMemberID(id) {
 		return nil, ErrBadID
@@ -306,6 +313,13 @@ func (s *Store) PutNode(n *Node) error {
 		return ErrBadID
 	}
 	return s.writeNew(nodeFile, n)
+}
+
+func (s *Store) ReplaceNode(n *Node) error {
+	if !n.valid() {
+		return ErrBadID
+	}
+	return s.replace(nodeFile, n)
 }
 
 func (s *Store) GetNode() (*Node, error) {
@@ -450,6 +464,61 @@ func (s *Store) read(rel string, v any) error {
 	return nil
 }
 
+func writeTemp(path string, v any) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmp := f.Name()
+	if err := f.Chmod(fileMode); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return tmp, nil
+}
+
+func (s *Store) replace(rel string, v any) error {
+	path := filepath.Join(s.dir, rel)
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s is not a regular file", ErrInsecure, rel)
+	}
+	tmp, err := writeTemp(path, v)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
 func (s *Store) writeNew(rel string, v any) error {
 	path := filepath.Join(s.dir, rel)
 	if _, err := os.Lstat(path); err == nil {
@@ -457,32 +526,8 @@ func (s *Store) writeNew(rel string, v any) error {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	data, err := json.Marshal(v)
+	tmp, err := writeTemp(path, v)
 	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	if err := f.Chmod(fileMode); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Link(tmp, path); err != nil {
