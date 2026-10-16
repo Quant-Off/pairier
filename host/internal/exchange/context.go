@@ -13,7 +13,6 @@ import (
 
 const (
 	ContextVersion = 2
-	contextV1      = 1
 	MaxMemberID    = 64
 	NonceLen       = 16
 	AuditHashLen   = 32
@@ -67,8 +66,6 @@ func NewContext(sender, recipient string, now time.Time, auditSeq uint64, auditH
 	return c, nil
 }
 
-func (c *Context) HasAuditHead() bool { return c.AuditSeq != 0 }
-
 func (c *Context) Encode() ([]byte, error) {
 	if !ValidMemberID(c.Sender) || !ValidMemberID(c.Recipient) {
 		return nil, ErrBadMemberID
@@ -93,7 +90,7 @@ func DecodeContext(b []byte) (*Context, error) {
 	}
 	r := wire.NewReader(b)
 	v, err := r.U8()
-	if err != nil || (v != contextV1 && v != ContextVersion) {
+	if err != nil || v != ContextVersion {
 		return nil, ErrFormat
 	}
 	c := &Context{}
@@ -111,16 +108,14 @@ func DecodeContext(b []byte) (*Context, error) {
 		return nil, ErrFormat
 	}
 	copy(c.Nonce[:], nonce)
-	if v == ContextVersion {
-		if c.AuditSeq, err = r.U64(); err != nil || c.AuditSeq == 0 {
-			return nil, ErrFormat
-		}
-		hash, err := r.Array(AuditHashLen)
-		if err != nil {
-			return nil, ErrFormat
-		}
-		copy(c.AuditHash[:], hash)
+	if c.AuditSeq, err = r.U64(); err != nil || c.AuditSeq == 0 {
+		return nil, ErrFormat
 	}
+	hash, err := r.Array(AuditHashLen)
+	if err != nil {
+		return nil, ErrFormat
+	}
+	copy(c.AuditHash[:], hash)
 	if err := r.Finish(); err != nil {
 		return nil, ErrFormat
 	}

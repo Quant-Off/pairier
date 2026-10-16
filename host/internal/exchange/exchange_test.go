@@ -27,7 +27,7 @@ func TestContextRoundtripAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if d.Sender != "alice" || d.Recipient != "bob" || d.CreatedAt != 1_700_000_000 || d.Nonce != c.Nonce ||
-		!d.HasAuditHead() || d.AuditSeq != 7 || !bytes.Equal(d.AuditHash[:], head) {
+		d.AuditSeq != 7 || !bytes.Equal(d.AuditHash[:], head) {
 		t.Fatalf("mismatch %+v", d)
 	}
 	w := wire.NewWriter()
@@ -37,9 +37,8 @@ func TestContextRoundtripAndValidation(t *testing.T) {
 	w.U64(5)
 	w.Bytes(c.Nonce[:])
 	v1, _ := w.Finish()
-	old, err := DecodeContext(v1)
-	if err != nil || old.HasAuditHead() || old.Sender != "alice" || old.CreatedAt != 5 {
-		t.Fatalf("version 1 context: %+v %v", old, err)
+	if _, err := DecodeContext(v1); !errors.Is(err, ErrFormat) {
+		t.Fatalf("version 1 context without an audit head accepted: %v", err)
 	}
 	zero := append([]byte{}, b...)
 	copy(zero[len(b)-4-AuditHashLen-8:], make([]byte, 8))
