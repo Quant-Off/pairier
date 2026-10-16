@@ -34,7 +34,7 @@
 이 외에도 다음과 같은 중요한 기능이 포함됩니다.
 
 - 검인증 암호 모듈: aws-lc-rs(AWS-LC)를 사용하며, `fips` feature로 FIPS 140-3 검증 모듈을 선택합니다. Go 쪽은 표준 라이브러리만 사용합니다.
-- 알고리즘: AES-256-GCM, ECDSA P-256/P-384, Ed25519, ML-DSA-65/87, ML-KEM-768/1024
+- 알고리즘: AES-256-GCM, ECDSA P-256/P-384, Ed25519, ML-DSA-65/87, ML-KEM-768/1024, MLKEM768-P256 하이브리드 KEM(draft-ietf-hpke-pq)
 - 선택적 PQC: 컴파일 타임 `pqc` feature와 런타임 `--pqc` 플래그를 모두 설정해야 활성화되며, `HELLO` 응답의 capability 비트를 통해 호스트에 알립니다.
 - 키 용도 강제: 생성 시 지정한 용도(ENCRYPT, DECRYPT, SIGN, VERIFY 등) 외의 연산은 코어 측에서 거부합니다.
 - 코어 하드닝: 시작 시 코어 덤프 차단, `ptrace` 거부, `no_new_privs`, `umask 077`, 환경 변수 제거, 불필요 `fd` 정리, 피어(peer) UID 검증, 루트 키 파일 권한·소유자·링크 검증을 수행합니다. Linux에서는 `mlockall`로 메모리 스와핑(swap)을 막습니다.

@@ -34,7 +34,7 @@ A stateless core is another key property. The core keeps only a 32-byte root key
 The following features are also included.
 
 - Validated cryptographic module: uses aws-lc-rs (AWS-LC); the `fips` feature selects the FIPS 140-3 validated module. The Go side uses the standard library only.
-- Algorithms: AES-256-GCM, ECDSA P-256/P-384, Ed25519, ML-DSA-65/87, ML-KEM-768/1024
+- Algorithms: AES-256-GCM, ECDSA P-256/P-384, Ed25519, ML-DSA-65/87, ML-KEM-768/1024, and the MLKEM768-P256 hybrid KEM (draft-ietf-hpke-pq)
 - Optional PQC: enabled only when both the compile-time `pqc` feature and the runtime `--pqc` flag are set, and advertised to the host through capability bits in the `HELLO` response.
 - Key usage enforcement: the core rejects any operation outside the usage assigned at generation time (ENCRYPT, DECRYPT, SIGN, VERIFY, and so on).
 - Core hardening: on startup the core disables core dumps, denies `ptrace`, sets `no_new_privs` and `umask 077`, scrubs environment variables, closes unneeded `fd`s, verifies the peer UID, and checks the root key file's permissions, owner, and links. On Linux, `mlockall` prevents memory from being swapped.

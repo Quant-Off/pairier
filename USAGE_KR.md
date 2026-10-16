@@ -80,14 +80,14 @@ alice$ export KMS_CORE=$PWD/core/target/release/kms-core
 alice$ kmsctl --dir ~/.pairier init --id alice --pqc
 member       alice
 identity     ml-dsa-65
-kem          hybrid-p256-ml-kem-768
+kem          mlkem768-p256
 core_fips    false
 go_fips      true
 pqc          true
 fingerprint  664e-c20d-cced-8ac3-5422-d278-d9ad-107b-d225-0aea-1e45-ff50-cce1-c28e-0319-ed0f
 ```
 
-초기화는 루트 키, 신원 서명 키, KEM 키, 감사 서명 키, TLS 키를 만들어냅니다. `--pqc` 플래그를 사용하면 ML-DSA-65 신원 키와 P-256 + ML-KEM-768 하이브리드 KEM을, 생략하면 ECDSA P-256과 DHKEM(P-256)을 사용합니다.
+초기화는 루트 키, 신원 서명 키, KEM 키, 감사 서명 키, TLS 키를 만들어냅니다. `--pqc` 플래그를 사용하면 ML-DSA-65 신원 키와, ML-KEM-768과 P-256을 draft-ietf-hpke-pq 방식으로 결합한 MLKEM768-P256 하이브리드 KEM을, 생략하면 ECDSA P-256과 DHKEM(P-256)을 사용합니다.
 
 > [!TIP]
 > 한 그룹 안에서는 모든 구성원이 같은 모드를 사용하는 것을 권장합니다. pqc 노드는 일반 카드를 등록할 수 있지만, pqc 없이 초기화한 노드는 pqc 카드를 검증할 수 없어 등록을 거부합니다.
@@ -112,6 +112,8 @@ bob$ kmsctl --dir ~/.pairier member add --card alice.card --fingerprint 664e-c20
 ```
 
 지문 비교는 대소문자, 공백, `-`, `:`를 무시합니다. 카드의 자기 서명이 일치하지 않거나 지문이 다르면 등록이 거부됩니다. 키를 주고받기 위해선 양측 모두 상대방을 등록해야 합니다.
+
+구성원이 카드를 갱신하면([카드 갱신](#카드-갱신) 참고) 새 카드를 같은 방법으로 새 지문과 함께 등록합니다. 이때 출력은 `updated`입니다. 같은 구성원 id라도 신원 키가 다른 카드는 거부됩니다.
 
 ### 4. 키 생성
 
@@ -180,6 +182,34 @@ bob$ kmsctl --dir ~/.pairier audit verify --anchor 13:9c1d...e4a0
 
 `head`는 마지막 항목의 순번과 해시입니다. 키 전달이나 구성원 등록처럼 중요한 작업을 마친 뒤에는 이 값을 노드 밖(다른 기기, 출력물 등)에 기록해 두세요. 나중에 `--anchor`로 넘기면 로그가 그 항목을 그대로 담고 있는지 확인합니다. 로그 끝부분이 잘렸거나, 이전 로그로 되돌린 뒤 이어 쓴 경우에는 실패합니다.
 
+모든 봉투에는 송신자의 현재 head도 담기며, 수신자는 이를 그 구성원에 대해 증인으로 본 head로 구성원마다 최대 4096개까지 보관합니다. 이 head들을 쓰면 직접 기록해 두지 않아도 로그를 확인할 수 있습니다.
+
+```bash
+bob$ kmsctl --dir ~/.pairier member witness --member alice --out alice.heads
+witnessed  3  heads  for  alice
+alice$ kmsctl --dir ~/.pairier audit verify --anchor-file alice.heads
+alice$ kmsctl --dir ~/.pairier audit verify --peer bob --url https://bob.example:7443
+```
+
+`--anchor`는 여러 번 줄 수 있고, `--anchor-file`은 한 줄에 하나씩 `SEQ:HASH`를 읽습니다. `--peer`는 그 구성원의 kmsd에 내 로그에 대해 증인으로 본 head를 요청합니다. 주어진 head가 하나라도 로그와 다르면 실패합니다. 이미 증인으로 본 순번에 다른 해시를 보낸 구성원의 봉투는 거부되고, 수신 측 감사 로그에 `witness.conflict`가 기록됩니다.
+
+## 카드 갱신
+
+```bash
+alice$ kmsctl --dir ~/.pairier card renew --out alice.card
+member       alice
+kem          mlkem768-p256
+fingerprint  1d0a-...-77c2
+send the new card and fingerprint to every member and restart kmsd
+```
+
+`card renew`는 코어 안에서 새 TLS 키를 만들고 그 키로 새 인증서를 발급합니다. KEM 키가 폐기된 하이브리드 KEM(1.0.0에서 `--pqc`로 만든 `hybrid-p256-ml-kem-768`)이면 `mlkem768-p256` 키로 교체합니다. 신원 키와 감사 키는 그대로이므로, 구성원은 새 지문을 이전과 같이 별도 채널로 확인한 뒤 `member add`로 카드를 갱신합니다.
+
+- 1.0.0에서 만든 노드는 TLS 개인키를 코어 밖에 두었습니다. `card renew`를 실행해야 `kmsd`, `key push`, `peer health`, `audit verify --peer`를 다시 쓸 수 있습니다.
+- 폐기된 하이브리드 KEM을 쓰는 카드로는 더 이상 키를 보낼 수 없습니다.
+- KEM 키를 교체한 뒤에는 이전 카드로 봉인된 봉투를 받을 수 없습니다. 갱신 전에 대기 중인 봉투를 먼저 수락하세요.
+- 봉투에 송신자의 감사 로그 head가 담기며 1.0.0은 이를 읽지 못합니다. 그룹의 모든 구성원을 함께 업그레이드하세요.
+
 ## kmsctl 명령 참조
 
 ### 전역 옵션
@@ -195,24 +225,26 @@ bob$ kmsctl --dir ~/.pairier audit verify --anchor 13:9c1d...e4a0
 
 ### 명령
 
-| 명령                                                            | 설명                                                                               |
-|---------------------------------------------------------------|----------------------------------------------------------------------------------|
-| `init --id MEMBER [--pqc]`                                    | 빈 디렉토리에 노드를 만듭니다.                                                                |
-| `card [--out FILE]`                                           | 자기 서명된 신원 카드를 출력합니다. 지문은 stderr에 표시됩니다.                                          |
-| `member add --card FILE --fingerprint FP`                     | 지문을 확인한 뒤 구성원을 등록합니다.                                                            |
-| `member list`                                                 | 등록된 구성원과 알고리즘, 지문을 표시합니다.                                                        |
-| `key gen --label LABEL [--usage LIST]`                        | 대칭 키를 생성합니다.                                                                     |
-| `key list`                                                    | 키 목록을 표시합니다. 마지막 열은 `local` 또는 `from <송신자>`입니다.                                  |
-| `key info --id KEYID`                                         | 키 상세와 출처를 표시합니다.                                                                 |
-| `key send --id KEYID --to MEMBER [--usage LIST] [--out FILE]` | 봉투 파일을 만듭니다.                                                                     |
-| `key receive [--in FILE]`                                     | 봉투를 검증하고 키를 가져옵니다.                                                               |
-| `key push --id KEYID --to MEMBER --url URL [--usage LIST]`    | 수신자의 kmsd로 봉투를 보냅니다.                                                             |
-| `inbox list`, `inbox accept --id ID`, `inbox reject --id ID`  | kmsd가 받은 봉투를 처리합니다.                                                              |
-| `peer health --member MEMBER --url URL`                       | 상대 kmsd와 상호 인증이 되는지 확인합니다.                                                       |
-| `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | 암호화합니다. 입력이 없으면 stdin을 씁니다.                                                      |
-| `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | 복호화합니다.                                                                          |
-| `audit verify [--anchor SEQ:HASH]`                            | 감사 로그 체인과 모든 체크포인트 서명을 검증하고 head를 출력합니다. `--anchor`를 주면 그 항목이 로그에 그대로 있는지 확인합니다. |
-| `version`                                                     | 버전과 Go FIPS 상태를 출력합니다.                                                           |
+| 명령                                                                                   | 설명                                                                                                               |
+|--------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| `init --id MEMBER [--pqc]`                                                           | 빈 디렉토리에 노드를 만듭니다.                                                                                                |
+| `card [--out FILE]`                                                                  | 자기 서명된 신원 카드를 출력합니다. 지문은 stderr에 표시됩니다.                                                                          |
+| `card renew [--out FILE]`                                                            | 코어 안에서 새 TLS 키와 인증서를 발급하고 폐기된 KEM 키를 교체합니다. 새 카드를 출력합니다.                                                         |
+| `member add --card FILE --fingerprint FP`                                            | 지문을 확인한 뒤 구성원을 등록하거나, 갱신된 카드로 교체합니다.                                                                             |
+| `member list`                                                                        | 등록된 구성원과 알고리즘, 지문을 표시합니다.                                                                                        |
+| `member witness --member MEMBER [--out FILE]`                                        | 그 구성원에 대해 증인으로 본 감사 로그 head를 한 줄에 하나씩 `SEQ:HASH`로 출력합니다.                                                         |
+| `key gen --label LABEL [--usage LIST]`                                               | 대칭 키를 생성합니다.                                                                                                     |
+| `key list`                                                                           | 키 목록을 표시합니다. 마지막 열은 `local` 또는 `from <송신자>`입니다.                                                                  |
+| `key info --id KEYID`                                                                | 키 상세와 출처를 표시합니다.                                                                                                 |
+| `key send --id KEYID --to MEMBER [--usage LIST] [--out FILE]`                        | 봉투 파일을 만듭니다.                                                                                                     |
+| `key receive [--in FILE]`                                                            | 봉투를 검증하고 키를 가져옵니다.                                                                                               |
+| `key push --id KEYID --to MEMBER --url URL [--usage LIST]`                           | 수신자의 kmsd로 봉투를 보냅니다.                                                                                             |
+| `inbox list`, `inbox accept --id ID`, `inbox reject --id ID`                         | kmsd가 받은 봉투를 처리합니다.                                                                                              |
+| `peer health --member MEMBER --url URL`                                              | 상대 kmsd와 상호 인증이 되는지 확인합니다.                                                                                       |
+| `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | 암호화합니다. 입력이 없으면 stdin을 씁니다.                                                                                      |
+| `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | 복호화합니다.                                                                                                          |
+| `audit verify [--anchor SEQ:HASH]... [--anchor-file FILE] [--peer MEMBER --url URL]` | 감사 로그 체인과 모든 체크포인트 서명을 검증하고 head를 출력합니다. 주어진 head(`--anchor`, `--anchor-file`, `--peer`)가 모두 로그에 그대로 있는지도 확인합니다. |
+| `version`                                                                            | 버전과 Go FIPS 상태를 출력합니다.                                                                                           |
 
 `--out`으로 지정한 파일이 이미 있으면 덮어쓰지 않고 실패하며, 새 파일은 `0600` 권한으로 만들어집니다. 종료 코드는 다음과 같습니다.
 
@@ -268,11 +300,12 @@ bob$ kmsctl --dir ~/.pairier audit verify --anchor 13:9c1d...e4a0
 
 모든 엔드포인트는 등록된 구성원의 클라이언트 인증서를 요구합니다.
 
-| 메서드와 경로          | 설명                                    |
-|------------------|---------------------------------------|
-| `GET /v1/health` | 구성원 id, FIPS, PQC 상태                  |
-| `GET /v1/card`   | 이 노드의 신원 카드                           |
-| `POST /v1/inbox` | 봉투 제출 (본문은 봉투 바이트). 성공 시 `201`과 봉투 id |
+| 메서드와 경로           | 설명                                    |
+|-------------------|---------------------------------------|
+| `GET /v1/health`  | 구성원 id, FIPS, PQC 상태                  |
+| `GET /v1/card`    | 이 노드의 신원 카드                           |
+| `POST /v1/inbox`  | 봉투 제출 (본문은 봉투 바이트). 성공 시 `201`과 봉투 id |
+| `GET /v1/witness` | 이 노드가 요청한 구성원에 대해 증인으로 본 감사 로그 head   |
 
 봉투의 송신자가 인증된 피어와 다르거나, 수신자가 이 노드가 아니거나, 서명이 일치하지 않으면 `400`으로 거부됩니다. 같은 봉투를 다시 보내면 `409`로, 같은 송신자의 대기 봉투가 64개에 이르면 `429`로 응답합니다. kmsd는 동시에 64개 연결까지 처리하고, 그 이상은 앞선 연결이 끝날 때까지 대기시킵니다.
 
@@ -329,7 +362,8 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
   keys/        키 레코드 - 키 재료는 루트 키로 봉인된 blob으로만 저장
   members/     등록된 구성원 카드와 지문
   inbox/       kmsd가 받은 봉투
-  tls.json     TLS 인증서와 코어로 암호화한 TLS 개인키
+  witness/     구성원별로 증인으로 본 감사 로그 head (구성원당 최대 4096개)
+  tls.json     TLS 인증서와 코어 안 TLS 키의 id
   audit.log    해시 체인 감사 로그 (항목마다 감사 키 서명)
 ```
 
@@ -340,8 +374,7 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 ## 보안 운영 주의 사항
 
 - **지문은 별도 채널로 확인하세요.** 카드와 지문을 같은 경로로 받으면 중간자 공격을 막을 수 없습니다.
-- **감사 로그의 한계를 이해해야 합니다.** 각 항목은 코어의 감사 키로 서명되므로, 코어를 쓸 수 없는 공격자(디스크 탈취, 변조된 백업 등)는 로그를 위조하거나 재계산할 수 없습니다. 반면 노드 사용자 권한으로 코어를 기동할 수 있으면 유효한 서명을 만들 수 있습니다. 또 로그 끝부분을 잘라 내거나 이전 로그로 되돌리는 것은, 노드 밖에 기록해 둔 head와 `audit verify --anchor`로 대조해야 탐지할 수 있습니다.
-- **kmsd는 TLS 개인키를 메모리에 둡니다.** 키 교환 대상인 대칭 키와 신원, KEM, 감사 키는 코어 밖으로 나오지 않지만, 전송용 TLS 키는 예외입니다.
+- **감사 로그의 한계를 이해해야 합니다.** 각 항목은 코어의 감사 키로 서명되므로, 코어를 쓸 수 없는 공격자(디스크 탈취, 변조된 백업 등)는 로그를 위조하거나 재계산할 수 없습니다. 반면 노드 사용자 권한으로 코어를 기동할 수 있으면 유효한 서명을 만들 수 있습니다. 또 로그 끝부분을 잘라 내거나 이전 로그로 되돌리는 것은, 다른 구성원이 증인으로 본 head나 노드 밖에 기록해 둔 head와 대조해야 탐지할 수 있습니다. 마지막으로 증인이 본 head 이후의 항목은 보호되지 않으므로 여러 구성원과 대조하세요.
 - **macOS는 개발용으로 사용하세요.** `mlockall`이 없어 메모리 잠금 없이 실행되고, FIPS 코어도 정적 링크되지 않습니다. 운영은 Linux에서 하십시오.
 - **PQC 모드 감사 로깅은 빠른 속도로 증가합니다.** ML-DSA 서명으로 인해 항목 하나가 약 7KB입니다. 암/복호화도 한 번마다 항목이 추가됩니다.
 
@@ -361,23 +394,28 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | 봉투 컨텍스트             | 1KiB                                            |
 | 송신자별 대기 봉투          | 64개                                             |
 | kmsd 동시 연결          | 64개                                             |
+| 구성원별 증인 head        | 4096개 (순번이 가장 낮은 것부터 버림)                        |
 
 ## 문제 해결
 
-| 메시지                                                                              | 원인 및 조치                                                                      |
-|----------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| `mlockall: Cannot allocate memory ... (pass --allow-unlocked-memory to proceed)` | memlock 한도가 작습니다. `ulimit -l unlimited` 또는 `LimitMEMLOCK=infinity`로 늘려야 합니다. |
-| `node: fingerprint does not match the card`                                      | 지문이 다릅니다. 카드를 다시 받아 별도 채널로 지문을 재확인해야 합니다.                                    |
-| `core: op 0x0023 failed: capability disabled`                                    | pqc 없이 초기화한 노드에 pqc 카드를 등록하려 했습니다.                                           |
-| `core: op 0x0030 failed: usage denied`                                           | 키에 `export`가 없거나, 원래 용도보다 넓은 용도를 주려 했습니다.                                    |
-| `node: envelope is addressed to another member`                                  | 다른 구성원에게 보낸 봉투입니다.                                                           |
-| `node: unknown member`                                                           | 송신자 또는 수신자가 등록되지 않았습니다.                                                      |
-| `store: object already exists`                                                   | 이미 가져온 키이거나 이미 받은 봉투입니다.                                                     |
-| `node: stored metadata does not match the core`                                  | 노드 디렉토리의 레코드가 변조되었습니다. 백업과 감사 로그를 확인해야 합니다.                                  |
-| `audit: checkpoint signature is invalid`                                         | 감사 로그가 코어 없이 수정되었습니다.                                                        |
-| `audit: log does not contain the anchored entry`                                 | 기록해 둔 head 이후 로그가 잘렸거나 이전 로그로 되돌려졌습니다. 백업과 노드 접근 기록을 확인해야 합니다.               |
-| `node: label contains control or bidirectional formatting characters`            | 라벨에서 제어 문자와 양방향 서식 문자를 빼야 합니다.                                               |
-| `api: push rejected: 429 inbox full for this sender`                             | 수신자 inbox에 내가 보낸 대기 봉투가 64개 쌓였습니다. 수신자가 수락하거나 거절해야 합니다.                      |
-| `transport: socket directory ... is writable by other users`                     | 소켓 디렉토리에서 그룹과 기타 사용자의 쓰기 권한을 빼야 합니다.                                         |
-| `` linker `link.exe` not found ``                                                | Windows 네이티브 빌드는 지원하지 않습니다. WSL2 안에서 빌드해야 합니다([빌드](#빌드) 참고).                 |
-| `undefined: syscall.Socketpair`, `undefined: syscall.Stat_t`                     | 원인이 위와 같습니다. 호스트가 Unix 시스템 콜을 사용하므로 WSL2 안에서 빌드해야 합니다.                       |
+| 메시지                                                                              | 원인 및 조치                                                                                             |
+|----------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
+| `mlockall: Cannot allocate memory ... (pass --allow-unlocked-memory to proceed)` | memlock 한도가 작습니다. `ulimit -l unlimited` 또는 `LimitMEMLOCK=infinity`로 늘려야 합니다.                        |
+| `node: fingerprint does not match the card`                                      | 지문이 다릅니다. 카드를 다시 받아 별도 채널로 지문을 재확인해야 합니다.                                                           |
+| `core: op 0x0023 failed: capability disabled`                                    | pqc 없이 초기화한 노드에 pqc 카드를 등록하려 했습니다.                                                                  |
+| `core: op 0x0030 failed: usage denied`                                           | 키에 `export`가 없거나, 원래 용도보다 넓은 용도를 주려 했습니다.                                                           |
+| `node: envelope is addressed to another member`                                  | 다른 구성원에게 보낸 봉투입니다.                                                                                  |
+| `node: unknown member`                                                           | 송신자 또는 수신자가 등록되지 않았습니다.                                                                             |
+| `store: object already exists`                                                   | 이미 가져온 키이거나 이미 받은 봉투입니다.                                                                            |
+| `node: stored metadata does not match the core`                                  | 노드 디렉토리의 레코드가 변조되었습니다. 백업과 감사 로그를 확인해야 합니다.                                                         |
+| `audit: checkpoint signature is invalid`                                         | 감사 로그가 코어 없이 수정되었습니다.                                                                               |
+| `audit: log does not contain the anchored entry`                                 | 기록해 두었거나 증인이 본 head 이후 로그가 잘렸거나 이전 로그로 되돌려졌습니다. 백업과 노드 접근 기록을 확인해야 합니다.                             |
+| `node: label contains control or bidirectional formatting characters`            | 라벨에서 제어 문자와 양방향 서식 문자를 빼야 합니다.                                                                      |
+| `api: push rejected: 429 inbox full for this sender`                             | 수신자 inbox에 내가 보낸 대기 봉투가 64개 쌓였습니다. 수신자가 수락하거나 거절해야 합니다.                                             |
+| `transport: socket directory ... is writable by other users`                     | 소켓 디렉토리에서 그룹과 기타 사용자의 쓰기 권한을 빼야 합니다.                                                                |
+| `node: tls key is held outside the core, ...`                                    | 1.0.0에서 만든 노드입니다. `card renew`를 실행하고 새 카드와 지문을 구성원에게 보낸 뒤 kmsd를 다시 시작해야 합니다.                        |
+| `node: member card uses a retired kem, ...`                                      | 구성원에게 `card renew`를 요청한 뒤 새 카드를 등록해야 합니다.                                                           |
+| `node: member identity key differs from the registered card`                     | 등록된 구성원의 갱신 카드가 아닙니다. 별도 채널로 지문을 확인해야 합니다.                                                          |
+| `node: member audit head conflicts with a head witnessed earlier`                | 송신자의 감사 로그가 분기했거나 되돌려졌습니다. 송신자 노드를 조사해야 합니다. 백업 복원임을 별도 채널로 확인한 경우에만 `witness/<member>.json`을 지웁니다. |
+| `` linker `link.exe` not found ``                                                | Windows 네이티브 빌드는 지원하지 않습니다. WSL2 안에서 빌드해야 합니다([빌드](#빌드) 참고).                                        |
+| `undefined: syscall.Socketpair`, `undefined: syscall.Stat_t`                     | 원인이 위와 같습니다. 호스트가 Unix 시스템 콜을 사용하므로 WSL2 안에서 빌드해야 합니다.                                              |

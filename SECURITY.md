@@ -61,10 +61,9 @@ pairier is designed around "Abandon trust. Choose isolation."
 
 These are design choices or open items that are disclosed here rather than treated as vulnerabilities. Reports that go beyond them are welcome.
 
-- `kmsd` holds its TLS private key in process memory. Identity, KEM, audit and symmetric keys never leave the core, but the transport key does.
-- The P-256 + ML-KEM-768 hybrid KEM combines the two shared secrets with an HKDF construction specific to pairier. It is not a standardized combiner.
+- The MLKEM768-P256 hybrid KEM follows draft-ietf-hpke-pq (HPKE KEM id 0x0050), which is still an Internet-Draft and may change before it becomes an RFC. The core keeps the private key in expanded form instead of the 32-byte seed the draft defines. This does not change the public key, the ciphertext or the shared secret.
 - A member who receives a key with `export` can send it on to others. Omit `export` to prevent re-sharing.
-- The audit log is a hash chain with a per-entry signature by the core's audit key. Anyone who can start the core as the node user can produce valid entries. Truncating the log tail or rolling the log back is detected only by comparing against a head recorded outside the node with `kmsctl audit verify --anchor`.
+- The audit log is a hash chain with a per-entry signature by the core's audit key. Anyone who can start the core as the node user can produce valid entries. Truncating the log tail or rolling the log back is detected only against heads that other members witnessed from the envelopes they received, or heads recorded outside the node. Entries after the last witnessed head are not protected, a member keeps at most 4096 heads per sender and drops the lowest sequence numbers first, and a dishonest witness can only cause a false alarm.
 - On macOS the core runs without locked memory and the FIPS core is not statically linked. macOS is for development only.
 - `make audit` uses a local RustSec advisory database that must be refreshed on a connected machine.
 - The Rust wire decoder mutation test is seeded, not coverage guided.
@@ -93,4 +92,6 @@ Releases are also reproducible. Running `make dist FIPS=1` in a git checkout of 
 
 - Core: aws-lc-rs. The `fips` feature selects the AWS-LC FIPS 140-3 validated module (static Linux builds).
 - Host: Go standard library only, built with `GOFIPS140=certified` by default.
-- Algorithms: AES-256-GCM, ECDSA P-256/P-384, Ed25519, DHKEM(P-256) per RFC 9180, ML-DSA-65/87, ML-KEM-768/1024, and the P-256 + ML-KEM-768 hybrid.
+- Algorithms: AES-256-GCM, ECDSA P-256/P-384, Ed25519, DHKEM(P-256) per RFC 9180, ML-DSA-65/87, ML-KEM-768/1024, and the MLKEM768-P256 hybrid KEM from draft-ietf-hpke-pq.
+- mTLS: the TLS key is an ECDSA P-256 key held in the core. `kmsd` and `kmsctl` pass the whole message to be signed, and the core hashes and signs it.
+- The hybrid KEM of 1.0.0 (`0x0210`) is retired. The core still opens such keys so that pending envelopes can be received, but it no longer creates them or seals to them.

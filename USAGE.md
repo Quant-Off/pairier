@@ -80,14 +80,14 @@ alice$ export KMS_CORE=$PWD/core/target/release/kms-core
 alice$ kmsctl --dir ~/.pairier init --id alice --pqc
 member       alice
 identity     ml-dsa-65
-kem          hybrid-p256-ml-kem-768
+kem          mlkem768-p256
 core_fips    false
 go_fips      true
 pqc          true
 fingerprint  664e-c20d-cced-8ac3-5422-d278-d9ad-107b-d225-0aea-1e45-ff50-cce1-c28e-0319-ed0f
 ```
 
-Initialization creates the root key, the identity signing key, the KEM key, the audit signing key and the TLS key. With the `--pqc` flag, the node uses an ML-DSA-65 identity key and a P-256 + ML-KEM-768 hybrid KEM. Without it, the node uses ECDSA P-256 and DHKEM(P-256).
+Initialization creates the root key, the identity signing key, the KEM key, the audit signing key and the TLS key. With the `--pqc` flag, the node uses an ML-DSA-65 identity key and the MLKEM768-P256 hybrid KEM, which combines ML-KEM-768 and P-256 as defined in draft-ietf-hpke-pq. Without it, the node uses ECDSA P-256 and DHKEM(P-256).
 
 > [!TIP]
 > All members of a group should use the same mode. A pqc node can register regular cards, but a node initialized without pqc cannot verify pqc cards and rejects them.
@@ -112,6 +112,8 @@ bob$ kmsctl --dir ~/.pairier member add --card alice.card --fingerprint 664e-c20
 ```
 
 Fingerprint comparison ignores case, whitespace, `-` and `:`. Registration is rejected if the card's self-signature does not verify or the fingerprint differs. Both sides must register each other before they can exchange keys.
+
+When a member renews their card (see [Renewing a card](#renewing-a-card)), register the new card the same way with the new fingerprint. The output then shows `updated`. A card for the same member id with a different identity key is rejected.
 
 ### 4. Generate a key
 
@@ -180,6 +182,34 @@ bob$ kmsctl --dir ~/.pairier audit verify --anchor 13:9c1d...e4a0
 
 `head` is the sequence number and hash of the last entry. After important operations such as sending keys or registering members, record this value outside the node (another device, a printout, and so on). Passing it later with `--anchor` checks that the log still contains that exact entry. The check fails if the end of the log was truncated, or if an older log was restored and then appended to.
 
+Every envelope also carries the sender's current head, and the recipient keeps it as a head witnessed for that member, up to 4096 per member. These heads let a member check their log without recording anything by hand.
+
+```bash
+bob$ kmsctl --dir ~/.pairier member witness --member alice --out alice.heads
+witnessed  3  heads  for  alice
+alice$ kmsctl --dir ~/.pairier audit verify --anchor-file alice.heads
+alice$ kmsctl --dir ~/.pairier audit verify --peer bob --url https://bob.example:7443
+```
+
+`--anchor` can be repeated, and `--anchor-file` reads one `SEQ:HASH` per line. `--peer` asks that member's kmsd for the heads it witnessed for you. The check fails if any given head differs from the log. If a member sends a different hash for a sequence number that was already witnessed, the recipient rejects the envelope and records `witness.conflict` in its own audit log.
+
+## Renewing a card
+
+```bash
+alice$ kmsctl --dir ~/.pairier card renew --out alice.card
+member       alice
+kem          mlkem768-p256
+fingerprint  1d0a-...-77c2
+send the new card and fingerprint to every member and restart kmsd
+```
+
+`card renew` creates a new TLS key inside the core and issues a new certificate for it. If the KEM key uses the retired hybrid KEM (`hybrid-p256-ml-kem-768`, created by 1.0.0 with `--pqc`), it is replaced with an `mlkem768-p256` key. The identity and audit keys stay the same, so members update the card with `member add` after verifying the new fingerprint over a separate channel, as before.
+
+- Nodes created by 1.0.0 kept the TLS private key outside the core. They must run `card renew` before `kmsd`, `key push`, `peer health` and `audit verify --peer` work again.
+- Members can no longer send keys to a card that still uses the retired hybrid KEM.
+- After the KEM key is replaced, envelopes sealed to the old card can no longer be received. Accept pending envelopes before renewing.
+- Envelopes now carry the sender's audit head, which 1.0.0 cannot read. Upgrade every member of a group together.
+
 ## kmsctl command reference
 
 ### Global options
@@ -195,24 +225,26 @@ Global options may appear before or after the command. `kmsctl --dir X key list`
 
 ### Commands
 
-| Command                                                       | Description                                                                                                                                                 |
-|---------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `init --id MEMBER [--pqc]`                                    | Creates a node in an empty directory.                                                                                                                       |
-| `card [--out FILE]`                                           | Prints the self-signed identity card. The fingerprint is shown on stderr.                                                                                   |
-| `member add --card FILE --fingerprint FP`                     | Registers a member after checking the fingerprint.                                                                                                          |
-| `member list`                                                 | Shows registered members with their algorithms and fingerprints.                                                                                            |
-| `key gen --label LABEL [--usage LIST]`                        | Generates a symmetric key.                                                                                                                                  |
-| `key list`                                                    | Lists keys. The last column is `local` or `from <sender>`.                                                                                                  |
-| `key info --id KEYID`                                         | Shows key details and origin.                                                                                                                               |
-| `key send --id KEYID --to MEMBER [--usage LIST] [--out FILE]` | Creates an envelope file.                                                                                                                                   |
-| `key receive [--in FILE]`                                     | Verifies an envelope and imports the key.                                                                                                                   |
-| `key push --id KEYID --to MEMBER --url URL [--usage LIST]`    | Sends an envelope to the recipient's kmsd.                                                                                                                  |
-| `inbox list`, `inbox accept --id ID`, `inbox reject --id ID`  | Handles envelopes received by kmsd.                                                                                                                         |
-| `peer health --member MEMBER --url URL`                       | Checks that mutual authentication with the peer's kmsd works.                                                                                               |
-| `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | Encrypts. Reads stdin when no input is given.                                                                                                               |
-| `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`     | Decrypts.                                                                                                                                                   |
-| `audit verify [--anchor SEQ:HASH]`                            | Verifies the audit log chain and every checkpoint signature, and prints the head. With `--anchor`, also checks that the anchored entry is still in the log. |
-| `version`                                                     | Prints the version and the Go FIPS status.                                                                                                                  |
+| Command                                                                              | Description                                                                                                                                                                      |
+|--------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `init --id MEMBER [--pqc]`                                                           | Creates a node in an empty directory.                                                                                                                                            |
+| `card [--out FILE]`                                                                  | Prints the self-signed identity card. The fingerprint is shown on stderr.                                                                                                        |
+| `card renew [--out FILE]`                                                            | Issues a new TLS key and certificate in the core and replaces a retired KEM key. Prints the new card.                                                                            |
+| `member add --card FILE --fingerprint FP`                                            | Registers a member after checking the fingerprint, or replaces the card with a renewed one.                                                                                      |
+| `member list`                                                                        | Shows registered members with their algorithms and fingerprints.                                                                                                                 |
+| `member witness --member MEMBER [--out FILE]`                                        | Prints the audit heads witnessed for the member, one `SEQ:HASH` per line.                                                                                                        |
+| `key gen --label LABEL [--usage LIST]`                                               | Generates a symmetric key.                                                                                                                                                       |
+| `key list`                                                                           | Lists keys. The last column is `local` or `from <sender>`.                                                                                                                       |
+| `key info --id KEYID`                                                                | Shows key details and origin.                                                                                                                                                    |
+| `key send --id KEYID --to MEMBER [--usage LIST] [--out FILE]`                        | Creates an envelope file.                                                                                                                                                        |
+| `key receive [--in FILE]`                                                            | Verifies an envelope and imports the key.                                                                                                                                        |
+| `key push --id KEYID --to MEMBER --url URL [--usage LIST]`                           | Sends an envelope to the recipient's kmsd.                                                                                                                                       |
+| `inbox list`, `inbox accept --id ID`, `inbox reject --id ID`                         | Handles envelopes received by kmsd.                                                                                                                                              |
+| `peer health --member MEMBER --url URL`                                              | Checks that mutual authentication with the peer's kmsd works.                                                                                                                    |
+| `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | Encrypts. Reads stdin when no input is given.                                                                                                                                    |
+| `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | Decrypts.                                                                                                                                                                        |
+| `audit verify [--anchor SEQ:HASH]... [--anchor-file FILE] [--peer MEMBER --url URL]` | Verifies the audit log chain and every checkpoint signature, and prints the head. Also checks that every given head (`--anchor`, `--anchor-file`, `--peer`) is still in the log. |
+| `version`                                                                            | Prints the version and the Go FIPS status.                                                                                                                                       |
 
 If the file given with `--out` already exists, the command fails instead of overwriting it, and new files are created with `0600` permissions. Exit codes are as follows.
 
@@ -268,11 +300,12 @@ If the file given with `--out` already exists, the command fails instead of over
 
 Every endpoint requires a client certificate of a registered member.
 
-| Method and path  | Description                                                                                        |
-|------------------|----------------------------------------------------------------------------------------------------|
-| `GET /v1/health` | Member id, FIPS and PQC status                                                                     |
-| `GET /v1/card`   | This node's identity card                                                                          |
-| `POST /v1/inbox` | Submits an envelope (the body is the envelope bytes). Returns `201` and the envelope id on success |
+| Method and path   | Description                                                                                        |
+|-------------------|----------------------------------------------------------------------------------------------------|
+| `GET /v1/health`  | Member id, FIPS and PQC status                                                                     |
+| `GET /v1/card`    | This node's identity card                                                                          |
+| `POST /v1/inbox`  | Submits an envelope (the body is the envelope bytes). Returns `201` and the envelope id on success |
+| `GET /v1/witness` | Audit heads this node witnessed for the requesting member                                          |
 
 An envelope is rejected with `400` if its sender differs from the authenticated peer, its recipient is not this node, or its signature does not verify. Submitting the same envelope again returns `409`, and once the same sender has 64 pending envelopes the response is `429`. kmsd serves up to 64 connections at a time, and further connections wait until an earlier one ends.
 
@@ -329,7 +362,8 @@ The directory that holds the socket must be owned by the core user or root. A di
   keys/        key records - key material is stored only as blobs sealed under the root key
   members/     registered member cards and fingerprints
   inbox/       envelopes received by kmsd
-  tls.json     TLS certificate and the TLS private key encrypted by the core
+  witness/     audit heads witnessed for each member (up to 4096 per member)
+  tls.json     TLS certificate and the id of the TLS key held in the core
   audit.log    hash-chained audit log (each entry signed with the audit key)
 ```
 
@@ -340,8 +374,7 @@ The directory that holds the socket must be owned by the core user or root. A di
 ## Security operations notes
 
 - **Verify fingerprints over a separate channel.** If the card and the fingerprint arrive by the same route, a man-in-the-middle attack cannot be prevented.
-- **Understand the limits of the audit log.** Each entry is signed with the core's audit key, so an attacker who cannot use the core (a stolen disk, a tampered backup, and so on) cannot forge or recompute the log. However, anyone who can start the core with the node user's permissions can produce valid signatures. Truncating the end of the log, or rolling it back to an older copy, is detected only by comparing against a head recorded outside the node with `audit verify --anchor`.
-- **kmsd keeps its TLS private key in memory.** The symmetric keys being exchanged and the identity, KEM and audit keys never leave the core, but the transport TLS key is an exception.
+- **Understand the limits of the audit log.** Each entry is signed with the core's audit key, so an attacker who cannot use the core (a stolen disk, a tampered backup, and so on) cannot forge or recompute the log. However, anyone who can start the core with the node user's permissions can produce valid signatures. Truncating the end of the log, or rolling it back to an older copy, is detected only against heads that members witnessed or that you recorded outside the node. Entries after the last witnessed head are not protected, so check against several members.
 - **Use macOS for development only.** Without `mlockall`, the core runs without memory locking, and the FIPS core is not statically linked. Run production deployments on Linux.
 - **The audit log grows quickly in PQC mode.** ML-DSA signatures make each entry about 7KB, and every encryption and decryption also adds an entry.
 
@@ -361,23 +394,28 @@ The directory that holds the socket must be owned by the core user or root. A di
 | Envelope context             | 1KiB                                                                                                                           |
 | Pending envelopes per sender | 64                                                                                                                             |
 | kmsd concurrent connections  | 64                                                                                                                             |
+| Witnessed heads per member   | 4096 (the lowest sequence numbers are dropped first)                                                                           |
 
 ## Troubleshooting
 
-| Message                                                                          | Cause and fix                                                                                        |
-|----------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| `mlockall: Cannot allocate memory ... (pass --allow-unlocked-memory to proceed)` | The memlock limit is too small. Raise it with `ulimit -l unlimited` or `LimitMEMLOCK=infinity`.      |
-| `node: fingerprint does not match the card`                                      | The fingerprint differs. Get the card again and re-verify the fingerprint over a separate channel.   |
-| `core: op 0x0023 failed: capability disabled`                                    | A pqc card was registered on a node initialized without pqc.                                         |
-| `core: op 0x0030 failed: usage denied`                                           | The key lacks `export`, or the requested usage is broader than the original.                         |
-| `node: envelope is addressed to another member`                                  | The envelope was sent to a different member.                                                         |
-| `node: unknown member`                                                           | The sender or the recipient is not registered.                                                       |
-| `store: object already exists`                                                   | The key was already imported or the envelope was already received.                                   |
-| `node: stored metadata does not match the core`                                  | Records in the node directory have been tampered with. Check backups and the audit log.              |
-| `audit: checkpoint signature is invalid`                                         | The audit log was modified without the core.                                                         |
-| `audit: log does not contain the anchored entry`                                 | The log was truncated or rolled back after the recorded head. Check backups and access to the node.  |
-| `node: label contains control or bidirectional formatting characters`            | Remove control and bidirectional formatting characters from the label.                               |
-| `api: push rejected: 429 inbox full for this sender`                             | The recipient's inbox holds 64 pending envelopes from you. The recipient must accept or reject some. |
-| `transport: socket directory ... is writable by other users`                     | Remove group and other write permission from the socket directory.                                   |
-| `` linker `link.exe` not found ``                                                | Native Windows builds are not supported. Build inside WSL2 (see [Build](#build)).                    |
-| `undefined: syscall.Socketpair`, `undefined: syscall.Stat_t`                     | Same cause as above. The host uses Unix system calls, so build it inside WSL2.                       |
+| Message                                                                          | Cause and fix                                                                                                                                                                   |
+|----------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `mlockall: Cannot allocate memory ... (pass --allow-unlocked-memory to proceed)` | The memlock limit is too small. Raise it with `ulimit -l unlimited` or `LimitMEMLOCK=infinity`.                                                                                 |
+| `node: fingerprint does not match the card`                                      | The fingerprint differs. Get the card again and re-verify the fingerprint over a separate channel.                                                                              |
+| `core: op 0x0023 failed: capability disabled`                                    | A pqc card was registered on a node initialized without pqc.                                                                                                                    |
+| `core: op 0x0030 failed: usage denied`                                           | The key lacks `export`, or the requested usage is broader than the original.                                                                                                    |
+| `node: envelope is addressed to another member`                                  | The envelope was sent to a different member.                                                                                                                                    |
+| `node: unknown member`                                                           | The sender or the recipient is not registered.                                                                                                                                  |
+| `store: object already exists`                                                   | The key was already imported or the envelope was already received.                                                                                                              |
+| `node: stored metadata does not match the core`                                  | Records in the node directory have been tampered with. Check backups and the audit log.                                                                                         |
+| `audit: checkpoint signature is invalid`                                         | The audit log was modified without the core.                                                                                                                                    |
+| `audit: log does not contain the anchored entry`                                 | The log was truncated or rolled back after a recorded or witnessed head. Check backups and access to the node.                                                                  |
+| `node: label contains control or bidirectional formatting characters`            | Remove control and bidirectional formatting characters from the label.                                                                                                          |
+| `api: push rejected: 429 inbox full for this sender`                             | The recipient's inbox holds 64 pending envelopes from you. The recipient must accept or reject some.                                                                            |
+| `transport: socket directory ... is writable by other users`                     | Remove group and other write permission from the socket directory.                                                                                                              |
+| `node: tls key is held outside the core, ...`                                    | The node was created by 1.0.0. Run `card renew`, send the new card and fingerprint to members and restart kmsd.                                                                 |
+| `node: member card uses a retired kem, ...`                                      | Ask the member to run `card renew`, then register the new card.                                                                                                                 |
+| `node: member identity key differs from the registered card`                     | The card is not a renewal of the registered member. Check the fingerprint over a separate channel.                                                                              |
+| `node: member audit head conflicts with a head witnessed earlier`                | The sender's audit log forked or was rolled back. Investigate the sender's node. Delete `witness/<member>.json` only after confirming a backup restore over a separate channel. |
+| `` linker `link.exe` not found ``                                                | Native Windows builds are not supported. Build inside WSL2 (see [Build](#build)).                                                                                               |
+| `undefined: syscall.Socketpair`, `undefined: syscall.Stat_t`                     | Same cause as above. The host uses Unix system calls, so build it inside WSL2.                                                                                                  |
