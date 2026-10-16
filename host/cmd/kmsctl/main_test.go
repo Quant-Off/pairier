@@ -233,4 +233,20 @@ func TestEndToEndExchange(t *testing.T) {
 	if code := run([]string{"audit", "verify", "--dir", bob, "--core", rel, "--allow-unlocked-memory"}, nil, &vout, &errb); code != 0 || !strings.HasPrefix(vout.String(), "verified\t") {
 		t.Fatalf("global flags after command with relative core: %d %s%s", code, vout.String(), errb.String())
 	}
+
+	renewed := filepath.Join(base, "alice.renewed")
+	_, renewOut, code := exec(nil, "--dir", alice, "card", "renew", "--out", renewed)
+	if code != 0 {
+		t.Fatalf("card renew failed: %s", renewOut)
+	}
+	newFP := field(renewOut, "fingerprint")
+	if newFP == field(initA, "fingerprint") || !strings.Contains(renewOut, "send the new card") {
+		t.Fatalf("card renew output %q", renewOut)
+	}
+	if _, _, code := exec(nil, "--dir", bob, "member", "add", "--card", renewed, "--fingerprint", field(initA, "fingerprint")); code == 0 {
+		t.Fatal("renewed card accepted with the old fingerprint")
+	}
+	if upd := must(nil, "--dir", bob, "member", "add", "--card", renewed, "--fingerprint", newFP); !strings.HasPrefix(upd, "updated\talice\t") {
+		t.Fatalf("member update %q", upd)
+	}
 }

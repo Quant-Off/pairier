@@ -3,8 +3,16 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -462,7 +470,7 @@ func TestTLSMaterialAndPeerLookup(t *testing.T) {
 	ctx := context.Background()
 	alice, aliceOpts := initNode(t, "alice", false)
 	bob, _ := initNode(t, "bob", false)
-	if alice.TLSCertificate().Leaf == nil || len(alice.TLSPublicKey()) == 0 {
+	if cert, err := alice.TLSCertificate(); err != nil || cert.Leaf == nil || len(alice.TLSPublicKey()) == 0 {
 		t.Fatal("tls material missing after init")
 	}
 	card, _, err := alice.Card(ctx)
@@ -500,12 +508,12 @@ func TestTLSMaterialAndPeerLookup(t *testing.T) {
 	if !bytes.Equal(reopened.TLSPublicKey(), spki) {
 		t.Fatal("tls key changed after reopen")
 	}
-	if reopened.TLSCertificate().Leaf.Subject.CommonName != "alice" {
-		t.Fatal("certificate subject")
+	if cert, err := reopened.TLSCertificate(); err != nil || cert.Leaf.Subject.CommonName != "alice" {
+		t.Fatalf("certificate subject: %v", err)
 	}
 	keys, _ := reopened.Keys()
 	if len(keys) != 4 {
-		t.Fatalf("expected identity, kem, audit and tls-wrap keys, got %d", len(keys))
+		t.Fatalf("expected identity, kem, audit and tls keys, got %d", len(keys))
 	}
 }
 
@@ -559,5 +567,235 @@ func TestLabelsRejectControlCharacters(t *testing.T) {
 	}
 	if _, err := alice.core.GenerateKey(ctx, wire.AlgAES256GCM, wire.UsageEncrypt, "a\nb"); err == nil {
 		t.Fatal("core accepted a control character in a label")
+	}
+}
+
+func writeLegacyTLS(t *testing.T, n *Node, dir string) []byte {
+	t.Helper()
+	ctx := context.Background()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: n.info.MemberID},
+		NotBefore:             time.Unix(1_600_000_000, 0),
+		NotAfter:              time.Unix(2_000_000_000, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	label := "tls-wrap/" + n.info.MemberID
+	wrap, err := n.core.GenerateKey(ctx, wire.AlgAES256GCM, wire.UsageEncrypt|wire.UsageDecrypt, label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapRec := &store.KeyRecord{KeyID: store.KeyIDString(wrap.KeyID), Alg: wire.AlgAES256GCM, Usage: wire.UsageEncrypt | wire.UsageDecrypt, Label: label, Blob: wrap.Blob, CreatedAt: 1}
+	if err := n.st.PutKey(wrapRec); err != nil {
+		t.Fatal(err)
+	}
+	ct, err := n.core.Encrypt(ctx, wrap.Blob, keyDER, certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(&store.TLSRecord{Cert: certDER, WrapKeyID: wrapRec.KeyID, KeyCiphertext: ct, CreatedAt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "tls.json")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return leaf.RawSubjectPublicKeyInfo
+}
+
+func hasEvent(t *testing.T, path, event string) bool {
+	t.Helper()
+	entries, err := audit.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Event == event {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTLSKeyStaysInCore(t *testing.T) {
+	alice, o := initNode(t, "alice", false)
+	cert, err := alice.TLSCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, ok := cert.PrivateKey.(*coreSigner)
+	if !ok {
+		t.Fatalf("tls private key type %T", cert.PrivateKey)
+	}
+	raw, err := os.ReadFile(filepath.Join(o.Dir, "tls.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("key_ciphertext")) || bytes.Contains(raw, []byte("wrap_key_id")) || !bytes.Contains(raw, []byte("key_id")) {
+		t.Fatalf("tls record holds key material: %s", raw)
+	}
+	if _, err := signer.Sign(rand.Reader, make([]byte, 32), crypto.SHA256); err == nil {
+		t.Fatal("pre-hashed signing accepted")
+	}
+	if _, err := signer.SignMessage(rand.Reader, []byte("m"), crypto.SHA384); err == nil {
+		t.Fatal("sha-384 signing accepted")
+	}
+	sig, err := signer.SignMessage(rand.Reader, []byte("message"), crypto.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("message"))
+	if !ecdsa.VerifyASN1(cert.Leaf.PublicKey.(*ecdsa.PublicKey), digest[:], sig) {
+		t.Fatal("core tls signature does not verify")
+	}
+	if err := cert.Leaf.CheckSignature(cert.Leaf.SignatureAlgorithm, cert.Leaf.RawTBSCertificate, cert.Leaf.Signature); err != nil {
+		t.Fatalf("self-signed certificate: %v", err)
+	}
+}
+
+func TestLegacyTLSNodeRenewsCard(t *testing.T) {
+	ctx := context.Background()
+	alice, aliceOpts := initNode(t, "alice", false)
+	bob, _ := initNode(t, "bob", false)
+	pair(t, alice, bob)
+	legacySPKI := writeLegacyTLS(t, alice, aliceOpts.Dir)
+	if err := alice.Close(); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := Open(ctx, aliceOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.TLSCertificate(); !errors.Is(err, ErrLegacyTLS) {
+		t.Fatalf("legacy tls key loaded: %v", err)
+	}
+	if !bytes.Equal(legacy.TLSPublicKey(), legacySPKI) {
+		t.Fatal("legacy card must keep its tls key until renewal")
+	}
+	oldCard, _, err := legacy.Card(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldFP, _ := oldCard.Fingerprint()
+	card, rawCard, err := legacy.RenewCard(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, _ := card.Fingerprint()
+	if bytes.Equal(card.TLSPublicKey, legacySPKI) || fp == oldFP {
+		t.Fatal("renewal kept the legacy tls key")
+	}
+	if !bytes.Equal(card.KemPublicKey, oldCard.KemPublicKey) || !bytes.Equal(card.IdentityPublicKey, oldCard.IdentityPublicKey) {
+		t.Fatal("renewal changed keys that are not retired")
+	}
+	if _, err := legacy.TLSCertificate(); err != nil {
+		t.Fatal(err)
+	}
+	if !hasEvent(t, legacy.AuditLogPath(), "card.renew") {
+		t.Fatal("card renewal not audited")
+	}
+
+	if _, err := bob.MemberByTLS(ctx, "alice", card.TLSPublicKey); !errors.Is(err, ErrUnknownMember) {
+		t.Fatalf("renewed key trusted before the card was updated: %v", err)
+	}
+	if _, err := bob.AddMember(ctx, rawCard, oldFP); !errors.Is(err, ErrFingerprint) {
+		t.Fatalf("renewed card accepted with the old fingerprint: %v", err)
+	}
+	rec, err := bob.AddMember(ctx, rawCard, fp)
+	if err != nil || rec.UpdatedAt == 0 || rec.AddedAt == 0 {
+		t.Fatalf("member update: %+v %v", rec, err)
+	}
+	if _, err := bob.AddMember(ctx, rawCard, fp); !errors.Is(err, store.ErrExists) {
+		t.Fatalf("same card added twice: %v", err)
+	}
+	if _, err := bob.MemberByTLS(ctx, "alice", card.TLSPublicKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.MemberByTLS(ctx, "alice", legacySPKI); !errors.Is(err, ErrUnknownMember) {
+		t.Fatalf("legacy tls key still trusted: %v", err)
+	}
+	if !hasEvent(t, bob.AuditLogPath(), "member.update") {
+		t.Fatal("member update not audited")
+	}
+	impostor, _ := initNode(t, "alice", false)
+	impCard, rawImp, _ := impostor.Card(ctx)
+	impFP, _ := impCard.Fingerprint()
+	if _, err := bob.AddMember(ctx, rawImp, impFP); !errors.Is(err, ErrIdentityChanged) {
+		t.Fatalf("card with another identity replaced a member: %v", err)
+	}
+
+	k, err := bob.GenerateKey(ctx, "after-renew", wire.UsageDecrypt|wire.UsageExport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := bob.Send(ctx, k.KeyID, "alice", wire.UsageDecrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Receive(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, aliceOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if _, err := reopened.TLSCertificate(); err != nil || !bytes.Equal(reopened.TLSPublicKey(), card.TLSPublicKey) {
+		t.Fatalf("renewed tls key after reopen: %v", err)
+	}
+}
+
+func TestRenewKEMReplacesTheNodeKem(t *testing.T) {
+	ctx := context.Background()
+	alice, o := initNode(t, "alice", true)
+	if !alice.Core().PQC() {
+		t.Skip("core built without pqc")
+	}
+	old := alice.kem.KeyID
+	if err := alice.renewKEM(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if alice.kem.KeyID == old || alice.kem.Alg != wire.AlgMLKEM768P256 || alice.info.KemKeyID != alice.kem.KeyID {
+		t.Fatalf("kem after renewal: %+v", alice.kem)
+	}
+	card, _, err := alice.Card(ctx)
+	if err != nil || !bytes.Equal(card.KemPublicKey, alice.kem.PublicKey) {
+		t.Fatalf("card kem: %v", err)
+	}
+	if err := alice.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if reopened.kem.KeyID != alice.kem.KeyID {
+		t.Fatal("renewed kem not persisted")
 	}
 }

@@ -163,12 +163,37 @@ func TestMembersNodeAndInbox(t *testing.T) {
 	if _, err := s.GetTLS(); !errors.Is(err, ErrNotInited) {
 		t.Fatalf("expected ErrNotInited, got %v", err)
 	}
-	tr := &TLSRecord{Cert: []byte("cert"), WrapKeyID: KeyIDString([16]byte{4}), KeyCiphertext: []byte("ct"), CreatedAt: 1}
-	if err := s.PutTLS(tr); err != nil {
+	legacy := &TLSRecord{Cert: []byte("cert"), WrapKeyID: KeyIDString([16]byte{4}), KeyCiphertext: []byte("ct"), CreatedAt: 1}
+	if err := s.PutTLS(legacy); !errors.Is(err, ErrBadID) {
+		t.Fatalf("legacy tls record written: %v", err)
+	}
+	if err := s.ReplaceTLS(&TLSRecord{Cert: []byte("cert"), KeyID: KeyIDString([16]byte{5})}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("replace of a missing tls record: %v", err)
+	}
+	if err := s.writeNew(tlsFile, legacy); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.GetTLS(); err != nil || string(got.Cert) != "cert" || got.WrapKeyID != tr.WrapKeyID {
+	if got, err := s.GetTLS(); err != nil || !got.Legacy() || got.WrapKeyID != legacy.WrapKeyID {
+		t.Fatalf("legacy tls: %+v %v", got, err)
+	}
+	for _, bad := range []*TLSRecord{
+		{Cert: []byte("cert"), KeyID: KeyIDString([16]byte{5}), WrapKeyID: KeyIDString([16]byte{4})},
+		{Cert: []byte("cert"), KeyID: "short"},
+		{KeyID: KeyIDString([16]byte{5})},
+	} {
+		if err := s.ReplaceTLS(bad); !errors.Is(err, ErrBadID) {
+			t.Fatalf("invalid tls record %+v accepted: %v", bad, err)
+		}
+	}
+	tr := &TLSRecord{Cert: []byte("cert2"), KeyID: KeyIDString([16]byte{5}), CreatedAt: 2}
+	if err := s.ReplaceTLS(tr); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetTLS(); err != nil || got.Legacy() || string(got.Cert) != "cert2" || got.KeyID != tr.KeyID {
 		t.Fatalf("tls: %+v %v", got, err)
+	}
+	if err := s.PutTLS(tr); !errors.Is(err, ErrExists) {
+		t.Fatalf("tls record overwritten: %v", err)
 	}
 	env := []byte("envelope")
 	rec := &InboxRecord{ID: InboxID(env), Envelope: env, ReceivedAt: 9}

@@ -42,8 +42,12 @@ func (s *Server) Handler() http.Handler {
 	return http.TimeoutHandler(secure(mux), requestTimeout, "timeout")
 }
 
-func (s *Server) TLSConfig() *tls.Config {
-	return auth.ServerTLSConfig(s.node.TLSCertificate(), s.node, s.now)
+func (s *Server) TLSConfig() (*tls.Config, error) {
+	cert, err := s.node.TLSCertificate()
+	if err != nil {
+		return nil, err
+	}
+	return auth.ServerTLSConfig(cert, s.node, s.now), nil
 }
 
 func secure(next http.Handler) http.Handler {
@@ -144,15 +148,19 @@ func NewClient(n *node.Node, now func() time.Time) *Client {
 	return &Client{node: n, now: now}
 }
 
-func (c *Client) httpClient(peer *exchange.Card) *http.Client {
+func (c *Client) httpClient(peer *exchange.Card) (*http.Client, error) {
+	cert, err := c.node.TLSCertificate()
+	if err != nil {
+		return nil, err
+	}
 	return &http.Client{
 		Timeout: requestTimeout,
 		Transport: &http.Transport{
-			TLSClientConfig:   auth.ClientTLSConfig(c.node.TLSCertificate(), peer, c.now),
+			TLSClientConfig:   auth.ClientTLSConfig(cert, peer, c.now),
 			ForceAttemptHTTP2: false,
 			Proxy:             nil,
 		},
-	}
+	}, nil
 }
 
 func (c *Client) Push(ctx context.Context, baseURL, to string, envelope []byte) (string, error) {
@@ -165,7 +173,11 @@ func (c *Client) Push(ctx context.Context, baseURL, to string, envelope []byte) 
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
-	rsp, err := c.httpClient(peer).Do(req)
+	hc, err := c.httpClient(peer)
+	if err != nil {
+		return "", err
+	}
+	rsp, err := hc.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("api: push: %w", err)
 	}
@@ -194,7 +206,11 @@ func (c *Client) Health(ctx context.Context, baseURL, member string) error {
 	if err != nil {
 		return err
 	}
-	rsp, err := c.httpClient(peer).Do(req)
+	hc, err := c.httpClient(peer)
+	if err != nil {
+		return err
+	}
+	rsp, err := hc.Do(req)
 	if err != nil {
 		return fmt.Errorf("api: health: %w", err)
 	}

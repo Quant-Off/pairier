@@ -3,14 +3,17 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"time"
 
@@ -19,24 +22,71 @@ import (
 	"github.com/Quant-Off/pairier/host/internal/wire"
 )
 
-const tlsValidity = 10 * 365 * 24 * time.Hour
+const (
+	tlsValidity    = 10 * 365 * 24 * time.Hour
+	tlsSignTimeout = 10 * time.Second
+	p256SigLen     = 64
+)
 
-var ErrTLSMaterial = errors.New("node: tls material is inconsistent")
+var (
+	ErrTLSMaterial = errors.New("node: tls material is inconsistent")
+	ErrLegacyTLS   = errors.New("node: tls key is held outside the core, run kmsctl card renew and send the new card to members")
+	errPrehashed   = errors.New("node: tls key signs only whole messages")
+	errTLSHash     = errors.New("node: tls key signs only with sha-256")
+)
 
-func (n *Node) createTLS(ctx context.Context) error {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return err
+type coreSigner struct {
+	n    *Node
+	blob []byte
+	pub  *ecdsa.PublicKey
+}
+
+func (s *coreSigner) Public() crypto.PublicKey { return s.pub }
+
+func (s *coreSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
+	return nil, errPrehashed
+}
+
+func (s *coreSigner) SignMessage(_ io.Reader, msg []byte, opts crypto.SignerOpts) ([]byte, error) {
+	if opts == nil || opts.HashFunc() != crypto.SHA256 {
+		return nil, errTLSHash
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	ctx, cancel := context.WithTimeout(context.Background(), tlsSignTimeout)
+	defer cancel()
+	sig, err := s.n.core.Sign(ctx, s.blob, msg)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	if len(sig) != p256SigLen {
+		return nil, ErrTLSMaterial
+	}
+	return asn1.Marshal(struct{ R, S *big.Int }{
+		new(big.Int).SetBytes(sig[:p256SigLen/2]),
+		new(big.Int).SetBytes(sig[p256SigLen/2:]),
+	})
+}
+
+func tlsLabel(memberID string) string { return "tls/" + memberID }
+
+func (n *Node) issueTLS(ctx context.Context) (*store.TLSRecord, error) {
+	label := tlsLabel(n.info.MemberID)
+	k, err := n.core.GenerateKey(ctx, wire.AlgECDSAP256SHA256, wire.UsageSign, label)
+	if err != nil {
+		return nil, err
+	}
+	now := n.opts.now()
+	rec := &store.KeyRecord{KeyID: store.KeyIDString(k.KeyID), Alg: wire.AlgECDSAP256SHA256, Usage: wire.UsageSign, Label: label, Blob: k.Blob, PublicKey: k.PublicKey, CreatedAt: now.Unix()}
+	if err := n.st.PutKey(rec); err != nil {
+		return nil, err
+	}
+	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), k.PublicKey)
+	if err != nil {
+		return nil, ErrTLSMaterial
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	now := n.opts.now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: n.info.MemberID},
@@ -46,23 +96,19 @@ func (n *Node) createTLS(ctx context.Context) error {
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 	}
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, &coreSigner{n: n, blob: k.Blob, pub: pub})
+	if err != nil {
+		return nil, err
+	}
+	return &store.TLSRecord{Cert: certDER, KeyID: rec.KeyID, CreatedAt: now.Unix()}, nil
+}
+
+func (n *Node) createTLS(ctx context.Context) error {
+	rec, err := n.issueTLS(ctx)
 	if err != nil {
 		return err
 	}
-	wrap, err := n.core.GenerateKey(ctx, wire.AlgAES256GCM, wire.UsageEncrypt|wire.UsageDecrypt, "tls-wrap/"+n.info.MemberID)
-	if err != nil {
-		return err
-	}
-	wrapRec := &store.KeyRecord{KeyID: store.KeyIDString(wrap.KeyID), Alg: wire.AlgAES256GCM, Usage: wire.UsageEncrypt | wire.UsageDecrypt, Label: "tls-wrap/" + n.info.MemberID, Blob: wrap.Blob, CreatedAt: now.Unix()}
-	if err := n.st.PutKey(wrapRec); err != nil {
-		return err
-	}
-	ct, err := n.core.Encrypt(ctx, wrap.Blob, keyDER, certDER)
-	if err != nil {
-		return err
-	}
-	if err := n.st.PutTLS(&store.TLSRecord{Cert: certDER, WrapKeyID: wrapRec.KeyID, KeyCiphertext: ct, CreatedAt: now.Unix()}); err != nil {
+	if err := n.st.PutTLS(rec); err != nil {
 		return err
 	}
 	return n.loadTLS(ctx)
@@ -73,35 +119,39 @@ func (n *Node) loadTLS(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	wrap, err := n.Key(ctx, rec.WrapKeyID)
-	if err != nil {
-		return fmt.Errorf("node: tls wrap key: %w", err)
-	}
-	keyDER, err := n.core.Decrypt(ctx, wrap.Blob, rec.KeyCiphertext, rec.Cert)
-	if err != nil {
-		return fmt.Errorf("node: tls key: %w", err)
-	}
-	key, err := x509.ParsePKCS8PrivateKey(keyDER)
-	if err != nil {
-		return ErrTLSMaterial
-	}
-	priv, ok := key.(*ecdsa.PrivateKey)
-	if !ok {
-		return ErrTLSMaterial
-	}
 	leaf, err := x509.ParseCertificate(rec.Cert)
 	if err != nil {
 		return ErrTLSMaterial
 	}
 	pub, ok := leaf.PublicKey.(*ecdsa.PublicKey)
-	if !ok || !pub.Equal(&priv.PublicKey) || leaf.Subject.CommonName != n.info.MemberID {
+	if !ok || pub.Curve != elliptic.P256() || leaf.Subject.CommonName != n.info.MemberID {
 		return ErrTLSMaterial
 	}
-	n.tls = tls.Certificate{Certificate: [][]byte{rec.Cert}, PrivateKey: priv, Leaf: leaf}
+	if rec.Legacy() {
+		n.tls = tls.Certificate{Certificate: [][]byte{rec.Cert}, Leaf: leaf}
+		n.tlsLegacy = true
+		return nil
+	}
+	key, err := n.Key(ctx, rec.KeyID)
+	if err != nil {
+		return fmt.Errorf("node: tls key: %w", err)
+	}
+	raw, err := pub.Bytes()
+	if err != nil || key.Alg != wire.AlgECDSAP256SHA256 || key.Usage != wire.UsageSign ||
+		key.Label != tlsLabel(n.info.MemberID) || !bytes.Equal(raw, key.PublicKey) {
+		return ErrTLSMaterial
+	}
+	n.tls = tls.Certificate{Certificate: [][]byte{rec.Cert}, PrivateKey: &coreSigner{n: n, blob: key.Blob, pub: pub}, Leaf: leaf}
+	n.tlsLegacy = false
 	return nil
 }
 
-func (n *Node) TLSCertificate() tls.Certificate { return n.tls }
+func (n *Node) TLSCertificate() (tls.Certificate, error) {
+	if n.tlsLegacy {
+		return tls.Certificate{}, ErrLegacyTLS
+	}
+	return n.tls, nil
+}
 
 func (n *Node) TLSPublicKey() []byte {
 	if n.tls.Leaf == nil {

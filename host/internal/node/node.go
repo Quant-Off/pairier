@@ -38,6 +38,7 @@ var (
 	ErrInboxFull       = errors.New("node: too many pending envelopes from this sender")
 	ErrLabel           = errors.New("node: label contains control or bidirectional formatting characters")
 	ErrRetiredKEM      = errors.New("node: member card uses a retired kem, the member must renew the card")
+	ErrIdentityChanged = errors.New("node: member identity key differs from the registered card")
 )
 
 const auditTimeout = 10 * time.Second
@@ -56,16 +57,17 @@ type Options struct {
 const MaxPendingPerSender = 64
 
 type Node struct {
-	inboxMu  sync.Mutex
-	opts     Options
-	st       *store.Store
-	core     *core.Client
-	log      *audit.Log
-	info     *store.Node
-	identity *store.KeyRecord
-	kem      *store.KeyRecord
-	auditKey *store.KeyRecord
-	tls      tls.Certificate
+	inboxMu   sync.Mutex
+	opts      Options
+	st        *store.Store
+	core      *core.Client
+	log       *audit.Log
+	info      *store.Node
+	identity  *store.KeyRecord
+	kem       *store.KeyRecord
+	auditKey  *store.KeyRecord
+	tls       tls.Certificate
+	tlsLegacy bool
 }
 
 type checkpoints struct{ n *Node }
@@ -418,12 +420,16 @@ func (n *Node) Card(ctx context.Context) (*exchange.Card, []byte, error) {
 
 func (n *Node) AddMember(ctx context.Context, raw []byte, fingerprint string) (*store.MemberRecord, error) {
 	rec, err := n.addMember(ctx, raw, fingerprint)
+	event := "member.add"
 	fields := map[string]string{}
 	if rec != nil {
 		fields["member"] = rec.MemberID
 		fields["fingerprint"] = rec.Fingerprint
+		if rec.UpdatedAt != 0 {
+			event = "member.update"
+		}
 	}
-	if err := n.audit("member.add", fields, err); err != nil {
+	if err := n.audit(event, fields, err); err != nil {
 		return nil, err
 	}
 	return rec, nil
@@ -447,11 +453,90 @@ func (n *Node) addMember(ctx context.Context, raw []byte, fingerprint string) (*
 	if err != nil {
 		return nil, err
 	}
-	rec := &store.MemberRecord{MemberID: card.MemberID, Card: raw, Fingerprint: fp, AddedAt: n.opts.now().Unix()}
-	if err := n.st.PutMember(rec); err != nil {
+	now := n.opts.now().Unix()
+	existing, err := n.st.GetMember(card.MemberID)
+	if errors.Is(err, store.ErrNotFound) {
+		rec := &store.MemberRecord{MemberID: card.MemberID, Card: raw, Fingerprint: fp, AddedAt: now}
+		if err := n.st.PutMember(rec); err != nil {
+			return nil, err
+		}
+		return rec, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Equal(existing.Card, raw) {
+		return nil, store.ErrExists
+	}
+	old, err := exchange.DecodeCard(existing.Card)
+	if err != nil {
+		return nil, err
+	}
+	if old.MemberID != card.MemberID || old.IdentityAlg != card.IdentityAlg || !bytes.Equal(old.IdentityPublicKey, card.IdentityPublicKey) {
+		return nil, ErrIdentityChanged
+	}
+	rec := &store.MemberRecord{MemberID: card.MemberID, Card: raw, Fingerprint: fp, AddedAt: existing.AddedAt, UpdatedAt: now}
+	if err := n.st.ReplaceMember(rec); err != nil {
 		return nil, err
 	}
 	return rec, nil
+}
+
+func (n *Node) RenewCard(ctx context.Context) (*exchange.Card, []byte, error) {
+	card, raw, err := n.renewCard(ctx)
+	fields := map[string]string{"member": n.info.MemberID}
+	if card != nil {
+		fp, _ := card.Fingerprint()
+		fields["fingerprint"] = fp
+		fields["kem"] = n.kem.KeyID
+	}
+	if err := n.audit("card.renew", fields, err); err != nil {
+		return nil, nil, err
+	}
+	return card, raw, nil
+}
+
+func (n *Node) renewCard(ctx context.Context) (*exchange.Card, []byte, error) {
+	if exchange.IsRetiredKemAlg(n.kem.Alg) {
+		if err := n.renewKEM(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
+	rec, err := n.issueTLS(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := n.st.ReplaceTLS(rec); err != nil {
+		return nil, nil, err
+	}
+	if err := n.loadTLS(ctx); err != nil {
+		return nil, nil, err
+	}
+	return n.Card(ctx)
+}
+
+func (n *Node) renewKEM(ctx context.Context) error {
+	alg := uint16(wire.AlgDHKEMP256)
+	if n.info.PQC {
+		alg = wire.AlgMLKEM768P256
+	}
+	label := "kem/" + n.info.MemberID
+	k, err := n.core.GenerateKey(ctx, alg, wire.UsageDecapsulate, label)
+	if err != nil {
+		return err
+	}
+	rec := &store.KeyRecord{KeyID: store.KeyIDString(k.KeyID), Alg: alg, Usage: wire.UsageDecapsulate, Label: label, Blob: k.Blob, PublicKey: k.PublicKey, CreatedAt: n.opts.now().Unix()}
+	if err := n.st.PutKey(rec); err != nil {
+		return err
+	}
+	info := *n.info
+	info.KemKeyID = rec.KeyID
+	if err := n.st.ReplaceNode(&info); err != nil {
+		return err
+	}
+	n.info = &info
+	n.kem = rec
+	return nil
 }
 
 func (n *Node) Members() ([]*store.MemberRecord, error) { return n.st.ListMembers() }

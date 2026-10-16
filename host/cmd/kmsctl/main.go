@@ -26,6 +26,7 @@ const usageText = `usage: kmsctl [--dir DIR] [--core PATH] <command> [flags]
 commands:
   init --id MEMBER [--pqc]
   card [--out FILE]
+  card renew [--out FILE]
   member add --card FILE --fingerprint FP
   member list
   key gen --label LABEL [--usage encrypt,decrypt,export]
@@ -131,6 +132,9 @@ func (c *cli) dispatch(args []string) (int, error) {
 	case "init":
 		return c.cmdInit(ctx, args[1:])
 	case "card":
+		if len(args) > 1 && args[1] == "renew" {
+			return c.cmdCardRenew(ctx, args[2:])
+		}
 		return c.cmdCard(ctx, args[1:])
 	case "member":
 		if len(args) < 2 {
@@ -286,6 +290,30 @@ func (c *cli) cmdCard(ctx context.Context, args []string) (int, error) {
 	return 0, nil
 }
 
+func (c *cli) cmdCardRenew(ctx context.Context, args []string) (int, error) {
+	fs := c.flags("card renew")
+	out := fs.String("out", "", "output file for the new card (default stdout)")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return 2, errors.New("card renew: invalid arguments")
+	}
+	n, err := c.open(ctx)
+	if err != nil {
+		return 1, err
+	}
+	defer n.Close()
+	card, raw, err := n.RenewCard(ctx)
+	if err != nil {
+		return 1, err
+	}
+	fp, _ := card.Fingerprint()
+	if err := c.writeOut(*out, raw); err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(c.stderr, "member\t%s\nkem\t%s\nfingerprint\t%s\n", card.MemberID, algName(card.KemAlg), fp)
+	fmt.Fprintln(c.stderr, "send the new card and fingerprint to every member and restart kmsd")
+	return 0, nil
+}
+
 func (c *cli) cmdMemberAdd(ctx context.Context, args []string) (int, error) {
 	fs := c.flags("member add")
 	cardPath := fs.String("card", "", "member card file")
@@ -309,7 +337,11 @@ func (c *cli) cmdMemberAdd(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(c.stdout, "added\t%s\t%s\n", rec.MemberID, rec.Fingerprint)
+	action := "added"
+	if rec.UpdatedAt != 0 {
+		action = "updated"
+	}
+	fmt.Fprintf(c.stdout, "%s\t%s\t%s\n", action, rec.MemberID, rec.Fingerprint)
 	return 0, nil
 }
 

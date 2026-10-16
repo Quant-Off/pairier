@@ -177,9 +177,13 @@ func serve(ctx context.Context, s settings, stderr io.Writer, ready func(addr st
 		}
 	}()
 	srv := api.New(n, nil)
+	tlsConfig, err := srv.TLSConfig()
+	if err != nil {
+		return err
+	}
 	hs := &http.Server{
 		Handler:           srv.Handler(),
-		TLSConfig:         srv.TLSConfig(),
+		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

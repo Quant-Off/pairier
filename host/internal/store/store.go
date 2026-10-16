@@ -69,6 +69,7 @@ type MemberRecord struct {
 	Card        []byte `json:"card"`
 	Fingerprint string `json:"fingerprint"`
 	AddedAt     int64  `json:"added_at"`
+	UpdatedAt   int64  `json:"updated_at,omitempty"`
 }
 
 type Node struct {
@@ -87,9 +88,22 @@ func (n *Node) valid() bool {
 
 type TLSRecord struct {
 	Cert          []byte `json:"cert"`
-	WrapKeyID     string `json:"wrap_key_id"`
-	KeyCiphertext []byte `json:"key_ciphertext"`
+	KeyID         string `json:"key_id,omitempty"`
+	WrapKeyID     string `json:"wrap_key_id,omitempty"`
+	KeyCiphertext []byte `json:"key_ciphertext,omitempty"`
 	CreatedAt     int64  `json:"created_at"`
+}
+
+func (r *TLSRecord) Legacy() bool { return r.KeyID == "" }
+
+func (r *TLSRecord) valid() bool {
+	if len(r.Cert) == 0 {
+		return false
+	}
+	if !r.Legacy() {
+		return ValidKeyID(r.KeyID) && r.WrapKeyID == "" && len(r.KeyCiphertext) == 0
+	}
+	return ValidKeyID(r.WrapKeyID) && len(r.KeyCiphertext) != 0
 }
 
 type InboxRecord struct {
@@ -337,10 +351,17 @@ func (s *Store) GetNode() (*Node, error) {
 }
 
 func (s *Store) PutTLS(r *TLSRecord) error {
-	if !ValidKeyID(r.WrapKeyID) || len(r.Cert) == 0 || len(r.KeyCiphertext) == 0 {
+	if r.Legacy() || !r.valid() {
 		return ErrBadID
 	}
 	return s.writeNew(tlsFile, r)
+}
+
+func (s *Store) ReplaceTLS(r *TLSRecord) error {
+	if r.Legacy() || !r.valid() {
+		return ErrBadID
+	}
+	return s.replace(tlsFile, r)
 }
 
 func (s *Store) GetTLS() (*TLSRecord, error) {
@@ -351,7 +372,7 @@ func (s *Store) GetTLS() (*TLSRecord, error) {
 		}
 		return nil, err
 	}
-	if !ValidKeyID(r.WrapKeyID) || len(r.Cert) == 0 || len(r.KeyCiphertext) == 0 {
+	if !r.valid() {
 		return nil, ErrCorrupt
 	}
 	return &r, nil

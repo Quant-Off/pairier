@@ -48,11 +48,15 @@ func trust(t *testing.T, a, b *node.Node) {
 func serve(t *testing.T, n *node.Node) string {
 	t.Helper()
 	srv := New(n, nil)
+	tlsConfig, err := srv.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	hs := &http.Server{Handler: srv.Handler(), TLSConfig: srv.TLSConfig(), ReadHeaderTimeout: 5 * time.Second}
+	hs := &http.Server{Handler: srv.Handler(), TLSConfig: tlsConfig, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = hs.ServeTLS(ln, "", "") }()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
