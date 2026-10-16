@@ -237,29 +237,57 @@ func TestBadHelloRejected(t *testing.T) {
 	}
 }
 
-func TestContextCancelUnblocksAndBreaks(t *testing.T) {
-	conn := fakeCore(t, func(h wire.Header, _ []byte) (wire.Header, []byte) {
+func slowCore(t *testing.T, delay time.Duration) net.Conn {
+	t.Helper()
+	return fakeCore(t, func(h wire.Header, _ []byte) (wire.Header, []byte) {
 		if h.Op == wire.OpHello {
 			return helloHandler(0)(h, nil)
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(delay)
 		rh, _ := wire.NewResponse(h.Op, h.ID, 0)
 		return rh, nil
 	})
-	c, err := newClient(context.Background(), conn, nil, 5*time.Second)
+}
+
+func TestCallerCancelDoesNotBreakSession(t *testing.T) {
+	c, err := newClient(context.Background(), slowCore(t, 200*time.Millisecond), nil, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
+	if err := c.Ping(ctx); err != nil {
+		t.Fatalf("call abandoned by its caller failed: %v", err)
+	}
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("session broken after an abandoned call: %v", err)
+	}
+	done, cancelDone := context.WithCancel(context.Background())
+	cancelDone()
+	if err := c.Ping(done); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled before sending, got %v", err)
+	}
+	if err := c.Ping(context.Background()); err != nil {
+		t.Fatalf("session broken after a cancelled caller: %v", err)
+	}
+}
+
+func TestHungCoreBreaksSessionAfterTimeout(t *testing.T) {
+	c, err := newClient(context.Background(), slowCore(t, 2*time.Second), nil, 200*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
 	start := time.Now()
-	err = c.Ping(ctx)
-	if !errors.Is(err, ErrBroken) {
+	if err := c.Ping(context.Background()); !errors.Is(err, ErrBroken) {
 		t.Fatalf("expected ErrBroken, got %v", err)
 	}
 	if time.Since(start) > time.Second {
-		t.Fatal("cancel did not unblock the call promptly")
+		t.Fatal("timeout did not unblock the call promptly")
+	}
+	if err := c.Ping(context.Background()); !errors.Is(err, ErrBroken) {
+		t.Fatalf("expected ErrBroken after timeout, got %v", err)
 	}
 }
 
