@@ -251,7 +251,7 @@ func TestAnchorDetectsTruncationAndRollback(t *testing.T) {
 	if err != nil || parsed != head {
 		t.Fatalf("round trip %v %v", parsed, err)
 	}
-	if _, _, err := VerifyAnchored(path, nil, &head); err != nil {
+	if _, _, err := VerifyAnchored(path, nil, []Anchor{head}); err != nil {
 		t.Fatal(err)
 	}
 	entries, _ := Read(path)
@@ -265,14 +265,17 @@ func TestAnchorDetectsTruncationAndRollback(t *testing.T) {
 	if _, err := Verify(path, nil); err != nil {
 		t.Fatalf("truncated prefix is still a valid chain: %v", err)
 	}
-	if _, _, err := VerifyAnchored(path, nil, &head); !errors.Is(err, ErrRollback) {
+	if _, _, err := VerifyAnchored(path, nil, []Anchor{head}); !errors.Is(err, ErrRollback) {
 		t.Fatalf("truncation not detected: %v", err)
 	}
-	if _, _, err := VerifyAnchored(path, nil, &mid); err != nil {
+	if _, _, err := VerifyAnchored(path, nil, []Anchor{mid}); err != nil {
 		t.Fatalf("older anchor rejected: %v", err)
 	}
+	if _, _, err := VerifyAnchored(path, nil, []Anchor{mid, head}); !errors.Is(err, ErrRollback) {
+		t.Fatalf("one failing anchor among several passed: %v", err)
+	}
 	wrong := Anchor{Seq: 3, Hash: entries[1].Hash}
-	if _, _, err := VerifyAnchored(path, nil, &wrong); !errors.Is(err, ErrRollback) {
+	if _, _, err := VerifyAnchored(path, nil, []Anchor{wrong}); !errors.Is(err, ErrRollback) {
 		t.Fatalf("wrong hash accepted: %v", err)
 	}
 
@@ -286,7 +289,7 @@ func TestAnchorDetectsTruncationAndRollback(t *testing.T) {
 		}
 	}
 	_ = l.Close()
-	if _, _, err := VerifyAnchored(path, nil, &head); !errors.Is(err, ErrRollback) {
+	if _, _, err := VerifyAnchored(path, nil, []Anchor{head}); !errors.Is(err, ErrRollback) {
 		t.Fatalf("rollback followed by new entries not detected: %v", err)
 	}
 }

@@ -13,7 +13,8 @@ import (
 )
 
 func TestContextRoundtripAndValidation(t *testing.T) {
-	c, err := NewContext("alice", "bob", time.Unix(1_700_000_000, 0))
+	head := bytes.Repeat([]byte{0xab}, AuditHashLen)
+	c, err := NewContext("alice", "bob", time.Unix(1_700_000_000, 0), 7, head)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,9 +26,37 @@ func TestContextRoundtripAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Sender != "alice" || d.Recipient != "bob" || d.CreatedAt != 1_700_000_000 || d.Nonce != c.Nonce {
+	if d.Sender != "alice" || d.Recipient != "bob" || d.CreatedAt != 1_700_000_000 || d.Nonce != c.Nonce ||
+		!d.HasAuditHead() || d.AuditSeq != 7 || !bytes.Equal(d.AuditHash[:], head) {
 		t.Fatalf("mismatch %+v", d)
 	}
+	w := wire.NewWriter()
+	w.U8(1)
+	w.String("alice")
+	w.String("bob")
+	w.U64(5)
+	w.Bytes(c.Nonce[:])
+	v1, _ := w.Finish()
+	old, err := DecodeContext(v1)
+	if err != nil || old.HasAuditHead() || old.Sender != "alice" || old.CreatedAt != 5 {
+		t.Fatalf("version 1 context: %+v %v", old, err)
+	}
+	zero := append([]byte{}, b...)
+	copy(zero[len(b)-4-AuditHashLen-8:], make([]byte, 8))
+	if _, err := DecodeContext(zero); !errors.Is(err, ErrFormat) {
+		t.Fatalf("zero audit seq accepted: %v", err)
+	}
+	if _, err := NewContext("alice", "bob", time.Now(), 0, head); !errors.Is(err, ErrFormat) {
+		t.Fatalf("context without audit head: %v", err)
+	}
+	if _, err := NewContext("alice", "bob", time.Now(), 1, head[:31]); !errors.Is(err, ErrFormat) {
+		t.Fatalf("short audit hash: %v", err)
+	}
+	b[0] = 3
+	if _, err := DecodeContext(b); !errors.Is(err, ErrFormat) {
+		t.Fatalf("unknown context version accepted: %v", err)
+	}
+	b[0] = ContextVersion
 	if _, err := DecodeContext(append(b, 0)); !errors.Is(err, ErrFormat) {
 		t.Fatalf("trailing bytes accepted: %v", err)
 	}
@@ -35,21 +64,21 @@ func TestContextRoundtripAndValidation(t *testing.T) {
 		t.Fatalf("truncated accepted: %v", err)
 	}
 	for _, bad := range []string{"", "Alice", "-a", "a b", "a/b", string(make([]byte, 65))} {
-		if _, err := NewContext(bad, "bob", time.Now()); !errors.Is(err, ErrBadMemberID) {
+		if _, err := NewContext(bad, "bob", time.Now(), 1, head); !errors.Is(err, ErrBadMemberID) {
 			t.Fatalf("member id %q accepted: %v", bad, err)
 		}
 	}
-	if _, err := NewContext("alice", "alice", time.Now()); !errors.Is(err, ErrBadMemberID) {
+	if _, err := NewContext("alice", "alice", time.Now(), 1, head); !errors.Is(err, ErrBadMemberID) {
 		t.Fatal("self exchange accepted")
 	}
-	c2, _ := NewContext("alice", "bob", time.Now())
+	c2, _ := NewContext("alice", "bob", time.Now(), 1, head)
 	if c2.Nonce == c.Nonce {
 		t.Fatal("nonce not fresh")
 	}
 }
 
 func TestEnvelopeAndCardEncoding(t *testing.T) {
-	cb, _ := (&Context{Sender: "a", Recipient: "b", CreatedAt: 1}).Encode()
+	cb, _ := (&Context{Sender: "a", Recipient: "b", CreatedAt: 1, AuditSeq: 1}).Encode()
 	e := &Envelope{Context: cb, Package: []byte("pkg"), SigAlg: wire.AlgECDSAP256SHA256, Signature: []byte("sig")}
 	b, err := e.Encode()
 	if err != nil {
@@ -176,7 +205,7 @@ func TestSignedEnvelopeAndCardWithRealCore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ectx, _ := NewContext("alice", "bob", time.Now())
+	ectx, _ := NewContext("alice", "bob", time.Now(), 1, make([]byte, AuditHashLen))
 	cb, _ := ectx.Encode()
 	pkg, err := a.ExportKey(ctx, k.Blob, received.KemAlg, received.KemPublicKey, wire.UsageDecrypt, cb)
 	if err != nil {

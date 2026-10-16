@@ -29,6 +29,7 @@ commands:
   card renew [--out FILE]
   member add --card FILE --fingerprint FP
   member list
+  member witness --member MEMBER [--out FILE]
   key gen --label LABEL [--usage encrypt,decrypt,export]
   key list
   key info --id KEYID
@@ -39,7 +40,7 @@ commands:
   inbox accept --id ENVELOPEID
   inbox reject --id ENVELOPEID
   peer health --member MEMBER --url https://HOST:PORT
-  audit verify [--anchor SEQ:HASH]
+  audit verify [--anchor SEQ:HASH]... [--anchor-file FILE] [--peer MEMBER --url https://HOST:PORT]
   encrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   decrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   version
@@ -138,13 +139,15 @@ func (c *cli) dispatch(args []string) (int, error) {
 		return c.cmdCard(ctx, args[1:])
 	case "member":
 		if len(args) < 2 {
-			return 2, errors.New("member: subcommand required (add, list)")
+			return 2, errors.New("member: subcommand required (add, list, witness)")
 		}
 		switch args[1] {
 		case "add":
 			return c.cmdMemberAdd(ctx, args[2:])
 		case "list":
 			return c.cmdMemberList(ctx, args[2:])
+		case "witness":
+			return c.cmdMemberWitness(ctx, args[2:])
 		}
 		return 2, fmt.Errorf("member: unknown subcommand %q", args[1])
 	case "key":
@@ -609,31 +612,99 @@ func (c *cli) cmdPeerHealth(ctx context.Context, args []string) (int, error) {
 	return 0, nil
 }
 
-func (c *cli) cmdAuditVerify(ctx context.Context, args []string) (int, error) {
-	fs := c.flags("audit verify")
-	anchorText := fs.String("anchor", "", "head recorded out of band (SEQ:HASH)")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		return 2, errors.New("audit verify: usage: audit verify [--anchor SEQ:HASH]")
+type anchorList []audit.Anchor
+
+func (l *anchorList) String() string { return fmt.Sprint(len(*l)) }
+
+func (l *anchorList) Set(s string) error {
+	a, err := audit.ParseAnchor(s)
+	if err != nil {
+		return err
 	}
-	var anchor *audit.Anchor
-	if *anchorText != "" {
-		a, err := audit.ParseAnchor(*anchorText)
-		if err != nil {
-			return 2, err
-		}
-		anchor = &a
+	*l = append(*l, a)
+	return nil
+}
+
+func (c *cli) cmdMemberWitness(ctx context.Context, args []string) (int, error) {
+	fs := c.flags("member witness")
+	member := fs.String("member", "", "member id")
+	out := fs.String("out", "", "output file (default stdout)")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *member == "" {
+		return 2, errors.New("member witness: --member is required")
 	}
 	n, err := c.open(ctx)
 	if err != nil {
 		return 1, err
 	}
 	defer n.Close()
-	count, head, err := n.VerifyAudit(anchor)
+	heads, err := n.Witnessed(*member)
+	if err != nil {
+		return 1, err
+	}
+	var b strings.Builder
+	for _, h := range heads {
+		b.WriteString(h.String())
+		b.WriteByte('\n')
+	}
+	if err := c.writeOut(*out, []byte(b.String())); err != nil {
+		return 1, err
+	}
+	fmt.Fprintf(c.stderr, "witnessed\t%d\theads\tfor\t%s\n", len(heads), *member)
+	return 0, nil
+}
+
+func (c *cli) cmdAuditVerify(ctx context.Context, args []string) (int, error) {
+	fs := c.flags("audit verify")
+	var anchors anchorList
+	fs.Var(&anchors, "anchor", "head recorded out of band (SEQ:HASH), repeatable")
+	anchorFile := fs.String("anchor-file", "", "file with one SEQ:HASH head per line")
+	peer := fs.String("peer", "", "member whose kmsd returns the heads it witnessed")
+	url := fs.String("url", "", "peer kmsd base url")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return 2, errors.New("audit verify: usage: audit verify [--anchor SEQ:HASH]... [--anchor-file FILE] [--peer MEMBER --url URL]")
+	}
+	if (*peer == "") != (*url == "") {
+		return 2, errors.New("audit verify: --peer and --url must be given together")
+	}
+	if *url != "" && !strings.HasPrefix(*url, "https://") {
+		return 2, errors.New("audit verify: --url must use https")
+	}
+	if *anchorFile != "" {
+		raw, err := c.readIn(*anchorFile)
+		if err != nil {
+			return 1, err
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if line = strings.TrimSpace(line); line == "" {
+				continue
+			}
+			a, err := audit.ParseAnchor(line)
+			if err != nil {
+				return 2, fmt.Errorf("audit verify: %s: %w", *anchorFile, err)
+			}
+			anchors = append(anchors, a)
+		}
+	}
+	n, err := c.open(ctx)
+	if err != nil {
+		return 1, err
+	}
+	defer n.Close()
+	if *peer != "" {
+		fetched, err := api.NewClient(n, nil).Witness(ctx, strings.TrimRight(*url, "/"), *peer)
+		if err != nil {
+			return 1, err
+		}
+		fmt.Fprintf(c.stderr, "witnessed\t%d\theads\tby\t%s\n", len(fetched), *peer)
+		anchors = append(anchors, fetched...)
+	}
+	count, head, err := n.VerifyAudit(anchors)
 	if err != nil {
 		return 1, err
 	}
 	fmt.Fprintf(c.stdout, "verified\t%d\tentries\n", count)
 	fmt.Fprintf(c.stdout, "head\t%s\n", head)
+	fmt.Fprintf(c.stdout, "anchors\t%d\n", len(anchors))
 	return 0, nil
 }
 

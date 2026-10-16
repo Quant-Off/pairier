@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Quant-Off/pairier/host/internal/audit"
 	"github.com/Quant-Off/pairier/host/internal/auth"
 	"github.com/Quant-Off/pairier/host/internal/exchange"
 	"github.com/Quant-Off/pairier/host/internal/node"
@@ -19,6 +20,7 @@ import (
 
 const (
 	maxInboxBody   = exchange.MaxEnvelope
+	maxWitnessBody = store.MaxWitnessHeads*96 + 1024
 	requestTimeout = 15 * time.Second
 )
 
@@ -39,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/health", s.health)
 	mux.HandleFunc("GET /v1/card", s.card)
 	mux.HandleFunc("POST /v1/inbox", s.inbox)
+	mux.HandleFunc("GET /v1/witness", s.witness)
 	return http.TimeoutHandler(secure(mux), requestTimeout, "timeout")
 }
 
@@ -136,6 +139,29 @@ func (s *Server) inbox(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type witnessBody struct {
+	Member string   `json:"member"`
+	Heads  []string `json:"heads"`
+}
+
+func (s *Server) witness(w http.ResponseWriter, r *http.Request) {
+	peer, err := s.peer(r)
+	if err != nil {
+		fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	heads, err := s.node.Witnessed(peer.MemberID)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "witness unavailable")
+		return
+	}
+	body := witnessBody{Member: peer.MemberID, Heads: make([]string, len(heads))}
+	for i, h := range heads {
+		body.Heads[i] = h.String()
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
 type Client struct {
 	node *node.Node
 	now  func() time.Time
@@ -220,4 +246,46 @@ func (c *Client) Health(ctx context.Context, baseURL, member string) error {
 		return fmt.Errorf("api: health: status %d", rsp.StatusCode)
 	}
 	return nil
+}
+
+func (c *Client) Witness(ctx context.Context, baseURL, member string) ([]audit.Anchor, error) {
+	peer, err := c.node.Member(ctx, member)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/witness", nil)
+	if err != nil {
+		return nil, err
+	}
+	hc, err := c.httpClient(peer)
+	if err != nil {
+		return nil, err
+	}
+	rsp, err := hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("api: witness: %w", err)
+	}
+	defer rsp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(rsp.Body, maxWitnessBody+1))
+	if err != nil || len(body) > maxWitnessBody {
+		return nil, errors.New("api: witness: response too large")
+	}
+	if rsp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("api: witness: status %d", rsp.StatusCode)
+	}
+	var wb witnessBody
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&wb); err != nil || wb.Member != c.node.MemberID() || len(wb.Heads) > store.MaxWitnessHeads {
+		return nil, errors.New("api: witness: malformed response")
+	}
+	out := make([]audit.Anchor, 0, len(wb.Heads))
+	for _, h := range wb.Heads {
+		a, err := audit.ParseAnchor(h)
+		if err != nil {
+			return nil, errors.New("api: witness: malformed response")
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }

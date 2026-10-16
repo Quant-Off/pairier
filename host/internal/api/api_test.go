@@ -195,3 +195,42 @@ func mustKey(t *testing.T, n *node.Node) string {
 	}
 	return k.KeyID
 }
+
+func TestWitnessedHeadsComeBackOnline(t *testing.T) {
+	ctx := context.Background()
+	alice := initNode(t, "alice")
+	bob := initNode(t, "bob")
+	carol := initNode(t, "carol")
+	trust(t, alice, bob)
+	trust(t, bob, carol)
+	bobURL := serve(t, bob)
+
+	heads, err := NewClient(alice, nil).Witness(ctx, bobURL, "bob")
+	if err != nil || len(heads) != 0 {
+		t.Fatalf("witness before any exchange: %v %v", heads, err)
+	}
+	k, err := alice.GenerateKey(ctx, "shared", wire.UsageDecrypt|wire.UsageExport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := alice.Send(ctx, k.KeyID, "bob", wire.UsageDecrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewClient(alice, nil).Push(ctx, bobURL, "bob", env); err != nil {
+		t.Fatal(err)
+	}
+	heads, err = NewClient(alice, nil).Witness(ctx, bobURL, "bob")
+	if err != nil || len(heads) != 1 {
+		t.Fatalf("witness after push: %v %v", heads, err)
+	}
+	if _, _, err := alice.VerifyAudit(heads); err != nil {
+		t.Fatal(err)
+	}
+	if mine, err := NewClient(carol, nil).Witness(ctx, bobURL, "bob"); err != nil || len(mine) != 0 {
+		t.Fatalf("carol saw heads witnessed for alice: %v %v", mine, err)
+	}
+	if _, err := NewClient(carol, nil).Witness(ctx, bobURL, "alice"); err == nil {
+		t.Fatal("witness fetched from a server pinned to another member")
+	}
+}

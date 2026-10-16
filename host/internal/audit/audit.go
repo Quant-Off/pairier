@@ -354,7 +354,7 @@ func Verify(path string, v Verifier) (uint64, error) {
 	return n, err
 }
 
-func VerifyAnchored(path string, v Verifier, anchor *Anchor) (uint64, Anchor, error) {
+func VerifyAnchored(path string, v Verifier, anchors []Anchor) (uint64, Anchor, error) {
 	entries, err := Read(path)
 	if err != nil {
 		return 0, Anchor{}, err
@@ -371,7 +371,7 @@ func VerifyAnchored(path string, v Verifier, anchor *Anchor) (uint64, Anchor, er
 		last := entries[len(entries)-1]
 		head = Anchor{Seq: last.Seq, Hash: last.Hash}
 	}
-	if anchor != nil {
+	for _, anchor := range anchors {
 		if anchor.Seq == 0 || anchor.Seq > uint64(len(entries)) {
 			return 0, Anchor{}, fmt.Errorf("%w: log ends at entry %d before anchored entry %d", ErrRollback, head.Seq, anchor.Seq)
 		}

@@ -249,4 +249,17 @@ func TestEndToEndExchange(t *testing.T) {
 	if upd := must(nil, "--dir", bob, "member", "add", "--card", renewed, "--fingerprint", newFP); !strings.HasPrefix(upd, "updated\talice\t") {
 		t.Fatalf("member update %q", upd)
 	}
+
+	witnessFile := filepath.Join(base, "alice.witness")
+	_, werr, code := exec(nil, "--dir", bob, "member", "witness", "--member", "alice", "--out", witnessFile)
+	if code != 0 || !strings.Contains(werr, "witnessed\t1\theads") {
+		t.Fatalf("member witness: %d %s", code, werr)
+	}
+	verified := must(nil, "--dir", alice, "audit", "verify", "--anchor-file", witnessFile)
+	if field(verified, "anchors") != "1" {
+		t.Fatalf("audit verify with witnessed heads %q", verified)
+	}
+	if _, _, code := exec(nil, "--dir", alice, "audit", "verify", "--peer", "bob"); code != 2 {
+		t.Fatalf("--peer without --url exit %d", code)
+	}
 }

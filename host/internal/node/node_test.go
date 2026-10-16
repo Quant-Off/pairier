@@ -799,3 +799,132 @@ func TestRenewKEMReplacesTheNodeKem(t *testing.T) {
 		t.Fatal("renewed kem not persisted")
 	}
 }
+
+func TestAddWitnessHeadKeepsOrderAndCap(t *testing.T) {
+	h := func(seq uint64, b byte) store.WitnessHead {
+		return store.WitnessHead{Seq: seq, Hash: strings.Repeat(string("0123456789abcdef"[b%16]), 64)}
+	}
+	heads, changed, conflict := addWitnessHead(nil, h(5, 1))
+	if !changed || conflict != "" || len(heads) != 1 {
+		t.Fatal("first head")
+	}
+	heads, _, _ = addWitnessHead(heads, h(9, 2))
+	heads, changed, _ = addWitnessHead(heads, h(2, 3))
+	if !changed || heads[0].Seq != 2 || heads[1].Seq != 5 || heads[2].Seq != 9 {
+		t.Fatalf("out of order delivery: %+v", heads)
+	}
+	if _, changed, conflict := addWitnessHead(heads, h(5, 1)); changed || conflict != "" {
+		t.Fatal("repeated head changed the record")
+	}
+	if _, changed, conflict := addWitnessHead(heads, h(5, 7)); changed || conflict != h(5, 1).Hash {
+		t.Fatalf("fork not reported: %q", conflict)
+	}
+	full := make([]store.WitnessHead, 0, store.MaxWitnessHeads)
+	for i := 1; i <= store.MaxWitnessHeads; i++ {
+		full = append(full, h(uint64(i)*2, 4))
+	}
+	full, changed, _ = addWitnessHead(full, h(uint64(store.MaxWitnessHeads)*2+1, 5))
+	if !changed || len(full) != store.MaxWitnessHeads || full[0].Seq != 4 || full[len(full)-1].Seq != uint64(store.MaxWitnessHeads)*2+1 {
+		t.Fatalf("cap kept %d heads from %d", len(full), full[0].Seq)
+	}
+}
+
+func TestPeersWitnessAuditHeads(t *testing.T) {
+	ctx := context.Background()
+	alice, aliceOpts := initNode(t, "alice", false)
+	bob, _ := initNode(t, "bob", false)
+	pair(t, alice, bob)
+	k, err := alice.GenerateKey(ctx, "witnessed", wire.UsageDecrypt|wire.UsageExport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, hash := alice.log.Head()
+	env, err := alice.Send(ctx, k.KeyID, "bob", wire.UsageDecrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.Receive(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	heads, err := bob.Witnessed("alice")
+	if err != nil || len(heads) != 1 || heads[0] != (audit.Anchor{Seq: seq, Hash: hash}) {
+		t.Fatalf("witnessed %v %v, want %d:%s", heads, err, seq, hash)
+	}
+	env2, err := alice.Send(ctx, k.KeyID, "bob", wire.UsageDecrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.StoreInbox(ctx, env2, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if heads, _ = bob.Witnessed("alice"); len(heads) != 2 {
+		t.Fatalf("inbox delivery not witnessed: %v", heads)
+	}
+	if none, err := alice.Witnessed("carol"); err != nil || len(none) != 0 {
+		t.Fatalf("unknown member witness: %v %v", none, err)
+	}
+	if _, _, err := alice.VerifyAudit(heads); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := alice.Key(ctx, k.KeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := alice.Member(ctx, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, err := exchange.NewContext("alice", "bob", alice.opts.now(), heads[0].Seq, bytes.Repeat([]byte{0x11}, exchange.AuditHashLen))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb, _ := forged.Encode()
+	pkg, err := alice.core.ExportKey(ctx, rec.Blob, card.KemAlg, card.KemPublicKey, wire.UsageDecrypt, cb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fenv, err := exchange.Seal(ctx, alice.core, alice.identity.Blob, alice.identity.Alg, forged, pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawForged, _ := fenv.Encode()
+	if _, err := bob.Receive(ctx, rawForged); !errors.Is(err, ErrWitnessConflict) {
+		t.Fatalf("forked audit head accepted: %v", err)
+	}
+	if !hasEvent(t, bob.AuditLogPath(), "witness.conflict") {
+		t.Fatal("witness conflict not audited")
+	}
+	if after, _ := bob.Witnessed("alice"); len(after) != 2 || after[0] != heads[0] {
+		t.Fatalf("conflict changed the witness record: %v", after)
+	}
+
+	if err := alice.Close(); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(aliceOpts.Dir, "audit.log")
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(raw), "\n")
+	if err := os.WriteFile(logPath, []byte(strings.Join(lines[:int(heads[0].Seq)-1], "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rolled, err := Open(ctx, aliceOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rolled.Close()
+	for i := 0; i < 5; i++ {
+		if _, err := rolled.GenerateKey(ctx, "refill", wire.UsageEncrypt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := rolled.VerifyAudit(nil); err != nil {
+		t.Fatalf("rolled back log is still a valid chain: %v", err)
+	}
+	if _, _, err := rolled.VerifyAudit(heads); !errors.Is(err, audit.ErrRollback) {
+		t.Fatalf("rollback hidden from the witnessed heads: %v", err)
+	}
+}

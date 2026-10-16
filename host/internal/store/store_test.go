@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -295,5 +296,76 @@ func TestReplaceIsAtomicAndNeedsAnExistingRecord(t *testing.T) {
 	top, _ := filepath.Glob(filepath.Join(s.Dir(), ".*.tmp"))
 	if len(leftovers)+len(top) != 0 {
 		t.Fatalf("temp files left behind: %v %v", leftovers, top)
+	}
+}
+
+func TestWitnessRecords(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.GetWitness("alice"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing witness: %v", err)
+	}
+	h1 := WitnessHead{Seq: 3, Hash: strings.Repeat("ab", 32), SeenAt: 1}
+	add := func(h WitnessHead) func(*WitnessRecord) (bool, error) {
+		return func(r *WitnessRecord) (bool, error) {
+			r.Heads = append(r.Heads, h)
+			return true, nil
+		}
+	}
+	if err := s.UpdateWitness("alice", add(h1)); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(s.Dir(), "witness"))
+	if err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("witness dir: %v %v", fi, err)
+	}
+	if err := s.UpdateWitness("alice", add(WitnessHead{Seq: 9, Hash: strings.Repeat("cd", 32)})); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetWitness("alice")
+	if err != nil || len(got.Heads) != 2 || got.Heads[0] != h1 || got.Heads[1].Seq != 9 {
+		t.Fatalf("witness: %+v %v", got, err)
+	}
+	for _, bad := range []WitnessHead{
+		{Seq: 2, Hash: strings.Repeat("ab", 32)},
+		{Seq: 9, Hash: strings.Repeat("ef", 32)},
+		{Seq: 10, Hash: "zz"},
+		{Seq: 11, Hash: strings.Repeat("AB", 32)},
+	} {
+		if err := s.UpdateWitness("alice", add(bad)); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("invalid head %+v stored: %v", bad, err)
+		}
+	}
+	unchanged := func(r *WitnessRecord) (bool, error) {
+		r.Heads = nil
+		return false, nil
+	}
+	if err := s.UpdateWitness("alice", unchanged); err != nil {
+		t.Fatal(err)
+	}
+	stop := errors.New("stop")
+	if err := s.UpdateWitness("alice", func(*WitnessRecord) (bool, error) { return true, stop }); !errors.Is(err, stop) {
+		t.Fatalf("update error lost: %v", err)
+	}
+	if got, err := s.GetWitness("alice"); err != nil || len(got.Heads) != 2 {
+		t.Fatalf("witness changed by a rejected update: %+v %v", got, err)
+	}
+	full := func(r *WitnessRecord) (bool, error) {
+		r.Heads = r.Heads[:0]
+		for i := 1; i <= MaxWitnessHeads+1; i++ {
+			r.Heads = append(r.Heads, WitnessHead{Seq: uint64(i), Hash: strings.Repeat("ab", 32)})
+		}
+		return true, nil
+	}
+	if err := s.UpdateWitness("alice", full); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("oversized witness stored: %v", err)
+	}
+	if err := s.UpdateWitness("../alice", add(h1)); !errors.Is(err, ErrBadID) {
+		t.Fatalf("bad member id: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir(), "witness", "bob.json"), []byte(`{"member_id":"alice","heads":[{"seq":1,"hash":"`+strings.Repeat("ab", 32)+`","seen_at":0}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetWitness("bob"); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("record for another member accepted: %v", err)
 	}
 }

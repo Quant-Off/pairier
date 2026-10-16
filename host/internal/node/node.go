@@ -2,14 +2,17 @@ package node
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +42,7 @@ var (
 	ErrLabel           = errors.New("node: label contains control or bidirectional formatting characters")
 	ErrRetiredKEM      = errors.New("node: member card uses a retired kem, the member must renew the card")
 	ErrIdentityChanged = errors.New("node: member identity key differs from the registered card")
+	ErrWitnessConflict = errors.New("node: member audit head conflicts with a head witnessed earlier")
 )
 
 const auditTimeout = 10 * time.Second
@@ -94,8 +98,62 @@ func (n *Node) openAudit() error {
 	return nil
 }
 
-func (n *Node) VerifyAudit(anchor *audit.Anchor) (uint64, audit.Anchor, error) {
-	return audit.VerifyAnchored(n.st.AuditLogPath(), checkpoints{n: n}, anchor)
+func (n *Node) VerifyAudit(anchors []audit.Anchor) (uint64, audit.Anchor, error) {
+	return audit.VerifyAnchored(n.st.AuditLogPath(), checkpoints{n: n}, anchors)
+}
+
+func (n *Node) Witnessed(member string) ([]audit.Anchor, error) {
+	rec, err := n.st.GetWitness(member)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]audit.Anchor, len(rec.Heads))
+	for i, h := range rec.Heads {
+		out[i] = audit.Anchor{Seq: h.Seq, Hash: h.Hash}
+	}
+	return out, nil
+}
+
+func addWitnessHead(heads []store.WitnessHead, head store.WitnessHead) ([]store.WitnessHead, bool, string) {
+	i, found := slices.BinarySearchFunc(heads, head.Seq, func(h store.WitnessHead, seq uint64) int { return cmp.Compare(h.Seq, seq) })
+	if found {
+		if heads[i].Hash == head.Hash {
+			return heads, false, ""
+		}
+		return heads, false, heads[i].Hash
+	}
+	heads = slices.Insert(heads, i, head)
+	if len(heads) > store.MaxWitnessHeads {
+		heads = heads[len(heads)-store.MaxWitnessHeads:]
+	}
+	return heads, true, ""
+}
+
+func (n *Node) witness(member string, ectx *exchange.Context) error {
+	if !ectx.HasAuditHead() {
+		return nil
+	}
+	head := store.WitnessHead{Seq: ectx.AuditSeq, Hash: hex.EncodeToString(ectx.AuditHash[:]), SeenAt: n.opts.now().Unix()}
+	var prior string
+	err := n.st.UpdateWitness(member, func(r *store.WitnessRecord) (bool, error) {
+		heads, changed, conflict := addWitnessHead(r.Heads, head)
+		if conflict != "" {
+			prior = conflict
+			return false, ErrWitnessConflict
+		}
+		r.Heads = heads
+		return changed, nil
+	})
+	if errors.Is(err, ErrWitnessConflict) {
+		fields := map[string]string{"member": member, "seq": fmt.Sprint(head.Seq), "witnessed": prior, "claimed": head.Hash}
+		if aerr := n.audit("witness.conflict", fields, nil); aerr != nil {
+			return errors.Join(err, aerr)
+		}
+	}
+	return err
 }
 
 func (n *Node) audit(event string, fields map[string]string, err error) error {
@@ -585,7 +643,12 @@ func (n *Node) send(ctx context.Context, keyID, to string, usage uint32) ([]byte
 	if exchange.IsRetiredKemAlg(card.KemAlg) {
 		return nil, ErrRetiredKEM
 	}
-	ectx, err := exchange.NewContext(n.info.MemberID, to, n.opts.now())
+	seq, headHash := n.log.Head()
+	hash, err := hex.DecodeString(headHash)
+	if err != nil {
+		return nil, err
+	}
+	ectx, err := exchange.NewContext(n.info.MemberID, to, n.opts.now(), seq, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -621,6 +684,9 @@ func (n *Node) Receive(ctx context.Context, raw []byte) (*store.KeyRecord, error
 func (n *Node) receive(ctx context.Context, raw []byte) (*store.KeyRecord, error) {
 	env, ectx, err := n.verifyEnvelope(ctx, raw)
 	if err != nil {
+		return nil, err
+	}
+	if err := n.witness(ectx.Sender, ectx); err != nil {
 		return nil, err
 	}
 	imp, err := n.core.ImportKey(ctx, n.kem.Blob, env.Package, env.Context)
@@ -695,6 +761,9 @@ func (n *Node) storeInbox(ctx context.Context, raw []byte, from string) (*store.
 	}
 	if ectx.Sender != from {
 		return nil, ErrSenderMismatch
+	}
+	if err := n.witness(from, ectx); err != nil {
+		return nil, err
 	}
 	n.inboxMu.Lock()
 	defer n.inboxMu.Unlock()

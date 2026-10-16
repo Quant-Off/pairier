@@ -23,6 +23,8 @@ const (
 	keysDir    = "keys"
 	membersDir = "members"
 	inboxDir   = "inbox"
+	witnessDir = "witness"
+	lockFile   = ".lock"
 	nodeFile   = "node.json"
 	tlsFile    = "tls.json"
 	rootFile   = "root.key"
@@ -38,7 +40,10 @@ var (
 	ErrNotInited = errors.New("store: directory is not initialized")
 )
 
+const MaxWitnessHeads = 4096
+
 var (
+	hashPattern     = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	hexIDPattern    = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	memberIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
@@ -104,6 +109,31 @@ func (r *TLSRecord) valid() bool {
 		return ValidKeyID(r.KeyID) && r.WrapKeyID == "" && len(r.KeyCiphertext) == 0
 	}
 	return ValidKeyID(r.WrapKeyID) && len(r.KeyCiphertext) != 0
+}
+
+type WitnessHead struct {
+	Seq    uint64 `json:"seq"`
+	Hash   string `json:"hash"`
+	SeenAt int64  `json:"seen_at"`
+}
+
+type WitnessRecord struct {
+	MemberID string        `json:"member_id"`
+	Heads    []WitnessHead `json:"heads"`
+}
+
+func (r *WitnessRecord) valid() bool {
+	if !ValidMemberID(r.MemberID) || len(r.Heads) == 0 || len(r.Heads) > MaxWitnessHeads {
+		return false
+	}
+	var last uint64
+	for _, h := range r.Heads {
+		if h.Seq <= last || !hashPattern.MatchString(h.Hash) {
+			return false
+		}
+		last = h.Seq
+	}
+	return true
 }
 
 type InboxRecord struct {
@@ -433,6 +463,61 @@ func (s *Store) DeleteInbox(id string) error {
 		return err
 	}
 	return syncDir(filepath.Dir(path))
+}
+
+func (s *Store) GetWitness(member string) (*WitnessRecord, error) {
+	if !ValidMemberID(member) {
+		return nil, ErrBadID
+	}
+	var r WitnessRecord
+	if err := s.read(filepath.Join(witnessDir, member+".json"), &r); err != nil {
+		return nil, err
+	}
+	if r.MemberID != member || !r.valid() {
+		return nil, fmt.Errorf("%w: witness record for %s", ErrCorrupt, member)
+	}
+	return &r, nil
+}
+
+func (s *Store) UpdateWitness(member string, update func(*WitnessRecord) (bool, error)) error {
+	if !ValidMemberID(member) {
+		return ErrBadID
+	}
+	dir := filepath.Join(s.dir, witnessDir)
+	if err := os.Mkdir(dir, dirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	if err := checkDir(dir); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, lockFile), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, fileMode)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("store: lock witness: %w", err)
+	}
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
+	rec, err := s.GetWitness(member)
+	exists := err == nil
+	if errors.Is(err, ErrNotFound) {
+		rec = &WitnessRecord{MemberID: member}
+	} else if err != nil {
+		return err
+	}
+	changed, err := update(rec)
+	if err != nil || !changed {
+		return err
+	}
+	if rec.MemberID != member || !rec.valid() {
+		return fmt.Errorf("%w: witness record for %s", ErrCorrupt, member)
+	}
+	rel := filepath.Join(witnessDir, member+".json")
+	if exists {
+		return s.replace(rel, rec)
+	}
+	return s.writeNew(rel, rec)
 }
 
 func (s *Store) listIDs(sub, ext string, valid func(string) bool) ([]string, error) {
