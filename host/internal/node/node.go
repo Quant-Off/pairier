@@ -762,9 +762,6 @@ func (n *Node) storeInbox(ctx context.Context, raw []byte, from string) (*store.
 	if ectx.Sender != from {
 		return nil, ErrSenderMismatch
 	}
-	if err := n.witness(from, ectx); err != nil {
-		return nil, err
-	}
 	n.inboxMu.Lock()
 	defer n.inboxMu.Unlock()
 	items, err := n.Inbox()
@@ -779,6 +776,9 @@ func (n *Node) storeInbox(ctx context.Context, raw []byte, from string) (*store.
 	}
 	if pending >= MaxPendingPerSender {
 		return nil, ErrInboxFull
+	}
+	if err := n.witness(from, ectx); err != nil {
+		return nil, err
 	}
 	rec := &store.InboxRecord{ID: store.InboxID(raw), Envelope: raw, ReceivedAt: n.opts.now().Unix()}
 	if err := n.st.PutInbox(rec); err != nil {

@@ -543,8 +543,13 @@ func TestInboxPendingLimitPerSender(t *testing.T) {
 			first = rec.ID
 		}
 	}
-	if _, err := bob.StoreInbox(ctx, send(), "alice"); !errors.Is(err, ErrInboxFull) {
-		t.Fatalf("limit not enforced: %v", err)
+	for i := 0; i < 3; i++ {
+		if _, err := bob.StoreInbox(ctx, send(), "alice"); !errors.Is(err, ErrInboxFull) {
+			t.Fatalf("limit not enforced: %v", err)
+		}
+	}
+	if heads, err := bob.Witnessed("alice"); err != nil || len(heads) != MaxPendingPerSender {
+		t.Fatalf("rejected envelopes were witnessed: %d %v", len(heads), err)
 	}
 	if err := bob.Reject(ctx, first); err != nil {
 		t.Fatal(err)
