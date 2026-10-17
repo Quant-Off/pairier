@@ -46,10 +46,10 @@ Go 바이너리는 기본적으로 Go 인증 암호 모듈(`GOFIPS140=certified`
 
 ```bash
 $ kms-core --version
-kms-core 2.0.0 (kms-engine 2.0.0, fips=true, pqc=true)
+kms-core 1.0.0 (kms-engine 1.0.0, fips=true, pqc=true)
 
 $ kmsctl version
-kmsctl 2.0.0 (go go1.27.2, go_fips=true)
+kmsctl 1.0.0 (go go1.27.2, go_fips=true)
 ```
 
 ## 설치
@@ -61,7 +61,7 @@ kmsctl 2.0.0 (go go1.27.2, go_fips=true)
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
 $ sha256sum --strict --ignore-missing -c SHA256SUMS
-$ tar -xzf pairier-2.0.0-linux-amd64.tar.gz
+$ tar -xzf pairier-1.0.0-linux-amd64.tar.gz
 ```
 
 `SHA256SUMS`에는 두 아키텍처의 파일이 모두 들어 있으며, `--ignore-missing`은 받지 않은 파일을 건너뜁니다.
@@ -142,7 +142,7 @@ af8477cc1076f219bfb047d846629eb8  aes-256-gcm  decrypt  project/db  from alice
 
 ```bash
 bob$ kmsd --dir ~/.pairier --listen 0.0.0.0:7443
-kmsd 2.0.0 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
+kmsd 1.0.0 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
 
 alice$ kmsctl --dir ~/.pairier peer health --member bob --url https://bob.example:7443
 ok  bob

@@ -26,11 +26,10 @@ Please include the affected component and version (release or commit hash), step
 
 | Version            | Supported |
 |--------------------|-----------|
-| 2.0.x              | Yes       |
-| 1.0.x              | No        |
+| 1.0.x              | Yes       |
 | Unreleased commits | No        |
 
-Security fixes are released only for the latest 2.0.x release. To move off 1.0.x, follow [Upgrading from 1.0.0](USAGE.md#upgrading-from-100).
+Security fixes are released only for the latest 1.0.x release.
 
 ## Scope
 
