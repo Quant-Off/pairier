@@ -26,10 +26,11 @@ Please include the affected component and version (release or commit hash), step
 
 | Version            | Supported |
 |--------------------|-----------|
-| 1.0.x              | Yes       |
+| 2.0.x              | Yes       |
+| 1.0.x              | No        |
 | Unreleased commits | No        |
 
-Security fixes are released only for the latest 1.0.x release.
+Security fixes are released only for the latest 2.0.x release. To move off 1.0.x, follow [Upgrading from 1.0.0](USAGE.md#upgrading-from-100).
 
 ## Scope
 
@@ -109,7 +110,7 @@ HTTP service:
 Envelope layer:
 
 - A KXP1 envelope holds a context, a key package and a signature by the sender's identity key over both.
-- The context names the sender and the recipient, and carries the creation time, a 16-byte random nonce and the sender's current audit log head.
+- The context names the sender and the recipient, and carries the creation time, a 16-byte random nonce and the sender's current audit log head. A context without an audit head is refused, which includes every envelope created by 1.0.0.
 - The package is produced inside the sender's core. The key is sealed to the recipient's KEM key (DHKEM P-256, or MLKEM768-P256 in PQC mode), the context is bound to it, and the recipient's core compares the context in constant time before it opens the package.
 - The sender can grant only a subset of the key's usage, and only from a key that has `export`. The recipient's core imports only 256-bit symmetric keys.
 - The receiver checks that it is the recipient, that the sender is registered, that the signature algorithm matches the sender's card and that the signature verifies. `kmsd` also requires the TLS peer to be the sender named in the envelope, so one member cannot deliver an envelope in another's name.
@@ -177,4 +178,4 @@ Releases are also reproducible. Running `make dist FIPS=1` in a git checkout of 
 - Key derivation: HKDF-SHA256 for key blobs and key packages, with a separate label for each.
 - mTLS: TLS 1.3 with the X25519MLKEM768 key exchange preferred. The TLS key is an ECDSA P-256 key held in the core. `kmsd` and `kmsctl` pass the whole message to be signed, and the core hashes and signs it.
 - Identity cards are self-signed by the identity key, and the fingerprint is the SHA-256 hash of the signed card content.
-- The hybrid KEM of 1.0.0 (`0x0210`) is retired. The core still opens such keys so that pending envelopes can be received, but it no longer creates them or seals to them.
+- The hybrid KEM of 1.0.0 (`0x0210`) is retired. The core opens such keys only so that a node created by 1.0.0 can start and run `card renew`. It no longer creates them, seals to them or imports keys with them.
