@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "kms-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "kms-engine",
  "kms-sys",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "kms-engine"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aws-lc-rs",
  "kms-sys",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "kms-sys"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "libc",
  "zeroize",
@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "kms-wire"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "libc"

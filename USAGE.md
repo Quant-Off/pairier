@@ -46,10 +46,10 @@ Go binaries are built with the Go Cryptographic Module (`GOFIPS140=certified`) b
 
 ```bash
 $ kms-core --version
-kms-core 1.0.0 (kms-engine 1.0.0, fips=true, pqc=true)
+kms-core 1.0.1 (kms-engine 1.0.1, fips=true, pqc=true)
 
 $ kmsctl version
-kmsctl 1.0.0 (go go1.27.2, go_fips=true)
+kmsctl 1.0.1 (go go1.27.2, go_fips=true)
 ```
 
 ## Installation
@@ -61,7 +61,7 @@ The distribution tarball contains `kms-core`, `kmsd`, `kmsctl`, `VERSION`, `sbom
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
 $ sha256sum --strict --ignore-missing -c SHA256SUMS
-$ tar -xzf pairier-1.0.0-linux-amd64.tar.gz
+$ tar -xzf pairier-1.0.1-linux-amd64.tar.gz
 ```
 
 `SHA256SUMS` lists the files for both architectures, and `--ignore-missing` skips the ones you did not download.
@@ -142,7 +142,7 @@ If the recipient keeps `kmsd` running, the sender can push the envelope directly
 
 ```bash
 bob$ kmsd --dir ~/.pairier --listen 0.0.0.0:7443
-kmsd 1.0.0 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
+kmsd 1.0.1 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
 
 alice$ kmsctl --dir ~/.pairier peer health --member bob --url https://bob.example:7443
 ok  bob

@@ -29,7 +29,7 @@ Please include the affected component and version (release or commit hash), step
 | 1.0.x              | Yes       |
 | Unreleased commits | No        |
 
-Security fixes are released only for the latest 1.0.x release.
+Security fixes are released only for the latest 1.0.x release. To move off 1.0.0, follow [Upgrading from 1.0.0](USAGE.md#upgrading-from-100).
 
 ## Scope
 
