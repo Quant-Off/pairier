@@ -90,7 +90,13 @@ func DecodeContext(b []byte) (*Context, error) {
 	}
 	r := wire.NewReader(b)
 	v, err := r.U8()
-	if err != nil || v != ContextVersion {
+	if err != nil {
+		return nil, ErrFormat
+	}
+	if v == 1 {
+		return nil, fmt.Errorf("%w: envelope from pairier 1.0.0 is no longer accepted", ErrFormat)
+	}
+	if v != ContextVersion {
 		return nil, ErrFormat
 	}
 	c := &Context{}
