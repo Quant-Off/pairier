@@ -133,9 +133,6 @@ func addWitnessHead(heads []store.WitnessHead, head store.WitnessHead) ([]store.
 }
 
 func (n *Node) witness(member string, ectx *exchange.Context) error {
-	if !ectx.HasAuditHead() {
-		return nil
-	}
 	head := store.WitnessHead{Seq: ectx.AuditSeq, Hash: hex.EncodeToString(ectx.AuditHash[:]), SeenAt: n.opts.now().Unix()}
 	var prior string
 	err := n.st.UpdateWitness(member, func(r *store.WitnessRecord) (bool, error) {
