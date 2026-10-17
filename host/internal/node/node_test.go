@@ -933,3 +933,66 @@ func TestPeersWitnessAuditHeads(t *testing.T) {
 		t.Fatalf("rollback hidden from the witnessed heads: %v", err)
 	}
 }
+
+func TestEnvelopeWithoutAuditHeadIsRejected(t *testing.T) {
+	ctx := context.Background()
+	alice, _ := initNode(t, "alice", false)
+	bob, _ := initNode(t, "bob", false)
+	pair(t, alice, bob)
+	k, err := alice.GenerateKey(ctx, "headless", wire.UsageDecrypt|wire.UsageExport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := alice.Key(ctx, k.KeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := alice.Member(ctx, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nonce [exchange.NonceLen]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	w := wire.NewWriter()
+	w.U8(1)
+	w.String("alice")
+	w.String("bob")
+	w.U64(uint64(alice.opts.now().Unix()))
+	w.Bytes(nonce[:])
+	cb, err := w.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := alice.core.ExportKey(ctx, rec.Blob, card.KemAlg, card.KemPublicKey, wire.UsageDecrypt, cb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw := wire.NewWriter()
+	sw.Bytes(cb)
+	sw.Bytes(pkg)
+	sw.U16(alice.identity.Alg)
+	body, err := sw.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := alice.core.Sign(ctx, alice.identity.Blob, append([]byte("KXP1"), body...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := &exchange.Envelope{Context: cb, Package: pkg, SigAlg: alice.identity.Alg, Signature: sig}
+	raw, err := env.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.StoreInbox(ctx, raw, "alice"); !errors.Is(err, exchange.ErrFormat) {
+		t.Fatalf("envelope without audit head stored: %v", err)
+	}
+	if _, err := bob.Receive(ctx, raw); !errors.Is(err, exchange.ErrFormat) {
+		t.Fatalf("envelope without audit head received: %v", err)
+	}
+	if heads, err := bob.Witnessed("alice"); err != nil || len(heads) != 0 {
+		t.Fatalf("witness record changed: %v %v", heads, err)
+	}
+}

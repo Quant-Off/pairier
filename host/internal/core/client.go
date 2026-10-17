@@ -222,15 +222,9 @@ func (c *Client) call(ctx context.Context, req, rsp wire.Message) error {
 		return err
 	}
 
-	deadline := time.Now().Add(c.timeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	if err := c.conn.SetDeadline(deadline); err != nil {
+	if err := c.conn.SetDeadline(time.Now().Add(c.timeout)); err != nil {
 		return c.failLocked(err)
 	}
-	stop := context.AfterFunc(ctx, func() { _ = c.conn.SetDeadline(time.Unix(1, 0)) })
-	defer stop()
 
 	frame := make([]byte, 0, len(hb)+len(body))
 	frame = append(frame, hb[:]...)

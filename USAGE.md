@@ -46,10 +46,10 @@ Go binaries are built with the Go Cryptographic Module (`GOFIPS140=certified`) b
 
 ```bash
 $ kms-core --version
-kms-core 1.0.0 (kms-engine 1.0.0, fips=true, pqc=true)
+kms-core 2.0.0 (kms-engine 2.0.0, fips=true, pqc=true)
 
 $ kmsctl version
-kmsctl 1.0.0 (go go1.27.2, go_fips=true)
+kmsctl 2.0.0 (go go1.27.2, go_fips=true)
 ```
 
 ## Installation
@@ -61,7 +61,7 @@ The distribution tarball contains `kms-core`, `kmsd`, `kmsctl`, `VERSION`, `sbom
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
 $ sha256sum --strict --ignore-missing -c SHA256SUMS
-$ tar -xzf pairier-1.0.0-linux-amd64.tar.gz
+$ tar -xzf pairier-2.0.0-linux-amd64.tar.gz
 ```
 
 `SHA256SUMS` lists the files for both architectures, and `--ignore-missing` skips the ones you did not download.
@@ -142,7 +142,7 @@ If the recipient keeps `kmsd` running, the sender can push the envelope directly
 
 ```bash
 bob$ kmsd --dir ~/.pairier --listen 0.0.0.0:7443
-kmsd 1.0.0 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
+kmsd 2.0.0 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
 
 alice$ kmsctl --dir ~/.pairier peer health --member bob --url https://bob.example:7443
 ok  bob
@@ -205,10 +205,16 @@ send the new card and fingerprint to every member and restart kmsd
 
 `card renew` creates a new TLS key inside the core and issues a new certificate for it. If the KEM key uses the retired hybrid KEM (`hybrid-p256-ml-kem-768`, created by 1.0.0 with `--pqc`), it is replaced with an `mlkem768-p256` key. The identity and audit keys stay the same, so members update the card with `member add` after verifying the new fingerprint over a separate channel, as before.
 
-- Nodes created by 1.0.0 kept the TLS private key outside the core. They must run `card renew` before `kmsd`, `key push`, `peer health` and `audit verify --peer` work again.
-- Members can no longer send keys to a card that still uses the retired hybrid KEM.
-- After the KEM key is replaced, envelopes sealed to the old card can no longer be received. Accept pending envelopes before renewing.
-- Envelopes now carry the sender's audit head, which 1.0.0 cannot read. Upgrade every member of a group together.
+### Upgrading from 1.0.0
+
+This version cannot exchange envelopes with 1.0.0 in either direction, and nodes created by 1.0.0 must renew their cards. Upgrade a group in the following order.
+
+1. Stop sending keys. While every node still runs 1.0.0, accept or reject all pending envelopes with `inbox accept` and `inbox reject`, and import every offline envelope file with `key receive`. This version refuses every envelope created by 1.0.0, because those envelopes carry no audit head.
+2. Upgrade every member of the group together. Envelopes now carry the sender's audit head, which 1.0.0 cannot read.
+3. Run `card renew` on every node. Nodes created by 1.0.0 kept the TLS private key outside the core, so `kmsd`, `key push`, `peer health` and `audit verify --peer` work only after renewal.
+4. Send the new card and fingerprint to every member. Members register it with `member add` after verifying the fingerprint over a separate channel. Then restart `kmsd`.
+
+Members cannot send keys to a card that still uses the retired hybrid KEM, and the node that owns that card cannot receive keys until it runs `card renew`.
 
 ## kmsctl command reference
 
@@ -415,6 +421,7 @@ The directory that holds the socket must be owned by the core user or root. A di
 | `transport: socket directory ... is writable by other users`                     | Remove group and other write permission from the socket directory.                                                                                                              |
 | `node: tls key is held outside the core, ...`                                    | The node was created by 1.0.0. Run `card renew`, send the new card and fingerprint to members and restart kmsd.                                                                 |
 | `node: member card uses a retired kem, ...`                                      | Ask the member to run `card renew`, then register the new card.                                                                                                                 |
+| `exchange: malformed object: envelope from pairier 1.0.0 ...`                    | The envelope was created by 1.0.0, which this version refuses. Ask the sender to upgrade and send the key again.                                                                |
 | `node: member identity key differs from the registered card`                     | The card is not a renewal of the registered member. Check the fingerprint over a separate channel.                                                                              |
 | `node: member audit head conflicts with a head witnessed earlier`                | The sender's audit log forked or was rolled back. Investigate the sender's node. Delete `witness/<member>.json` only after confirming a backup restore over a separate channel. |
 | `` linker `link.exe` not found ``                                                | Native Windows builds are not supported. Build inside WSL2 (see [Build](#build)).                                                                                               |

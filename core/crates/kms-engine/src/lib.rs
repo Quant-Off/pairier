@@ -161,6 +161,14 @@ impl Engine {
         Ok(k)
     }
 
+    fn open_current_kem(&self, blob: &[u8]) -> Result<blob::Unsealed, Error> {
+        let k = self.open_for(blob, AlgKind::Kem, kms_wire::usage::DECAPSULATE)?;
+        if k.alg.is_retired() {
+            return Err(Error::UnsupportedAlgorithm);
+        }
+        Ok(k)
+    }
+
     pub fn aead_encrypt(
         &self,
         blob: &[u8],
@@ -271,7 +279,7 @@ impl Engine {
         {
             return Err(Error::LimitExceeded);
         }
-        let k = self.open_for(kem_blob, AlgKind::Kem, kms_wire::usage::DECAPSULATE)?;
+        let k = self.open_current_kem(kem_blob)?;
         let imported = export::open(k.alg, &k.secret, package, context)?;
         if imported.alg.kind() != AlgKind::Symmetric || imported.secret.len() != aead::KEY_LEN {
             return Err(Error::InvalidArgument);
@@ -293,7 +301,7 @@ impl Engine {
     }
 
     pub fn decapsulate(&self, blob: &[u8], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
-        let k = self.open_for(blob, AlgKind::Kem, kms_wire::usage::DECAPSULATE)?;
+        let k = self.open_current_kem(blob)?;
         kem::decapsulate(k.alg, &k.secret, ciphertext)
     }
 }
@@ -535,7 +543,7 @@ mod tests {
 
     #[cfg(feature = "pqc")]
     #[test]
-    fn retired_hybrid_opens_but_never_seals() {
+    fn retired_hybrid_opens_but_never_seals_or_imports() {
         let e = engine();
         let decap = Usage::from_bits(usage::DECAPSULATE).unwrap();
         let legacy = Alg::HybridP256MlKem768;
@@ -575,9 +583,15 @@ mod tests {
             context: b"ctx",
         };
         let pkg = super::export::seal(&pending, &public_key, &opened.secret).unwrap();
-        let imp = e.import_key(&kem_blob, &pkg, b"ctx").unwrap();
-        assert_eq!(imp.key_id, k.key_id);
-        assert_eq!(imp.usage, grant);
+        assert_eq!(
+            e.import_key(&kem_blob, &pkg, b"ctx"),
+            Err(Error::UnsupportedAlgorithm)
+        );
+        let (ct, _) = super::kem::encapsulate(legacy, &public_key).unwrap();
+        assert!(matches!(
+            e.decapsulate(&kem_blob, &ct),
+            Err(Error::UnsupportedAlgorithm)
+        ));
     }
 
     fn exchange_roundtrip(sender: &Engine, recipient: &Engine, kem_alg: Alg) {
