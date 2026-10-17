@@ -46,10 +46,10 @@ Go 바이너리는 기본적으로 Go 인증 암호 모듈(`GOFIPS140=certified`
 
 ```bash
 $ kms-core --version
-kms-core 1.0.0 (kms-engine 1.0.0, fips=true, pqc=true)
+kms-core 2.0.0 (kms-engine 2.0.0, fips=true, pqc=true)
 
 $ kmsctl version
-kmsctl 1.0.0 (go go1.27.2, go_fips=true)
+kmsctl 2.0.0 (go go1.27.2, go_fips=true)
 ```
 
 ## 설치
@@ -61,7 +61,7 @@ kmsctl 1.0.0 (go go1.27.2, go_fips=true)
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
 $ sha256sum --strict --ignore-missing -c SHA256SUMS
-$ tar -xzf pairier-1.0.0-linux-amd64.tar.gz
+$ tar -xzf pairier-2.0.0-linux-amd64.tar.gz
 ```
 
 `SHA256SUMS`에는 두 아키텍처의 파일이 모두 들어 있으며, `--ignore-missing`은 받지 않은 파일을 건너뜁니다.
@@ -142,7 +142,7 @@ af8477cc1076f219bfb047d846629eb8  aes-256-gcm  decrypt  project/db  from alice
 
 ```bash
 bob$ kmsd --dir ~/.pairier --listen 0.0.0.0:7443
-kmsd 1.0.0 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
+kmsd 2.0.0 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
 
 alice$ kmsctl --dir ~/.pairier peer health --member bob --url https://bob.example:7443
 ok  bob
@@ -205,10 +205,16 @@ send the new card and fingerprint to every member and restart kmsd
 
 `card renew`는 코어 안에서 새 TLS 키를 만들고 그 키로 새 인증서를 발급합니다. KEM 키가 폐기된 하이브리드 KEM(1.0.0에서 `--pqc`로 만든 `hybrid-p256-ml-kem-768`)이면 `mlkem768-p256` 키로 교체합니다. 신원 키와 감사 키는 그대로이므로, 구성원은 새 지문을 이전과 같이 별도 채널로 확인한 뒤 `member add`로 카드를 갱신합니다.
 
-- 1.0.0에서 만든 노드는 TLS 개인키를 코어 밖에 두었습니다. `card renew`를 실행해야 `kmsd`, `key push`, `peer health`, `audit verify --peer`를 다시 쓸 수 있습니다.
-- 폐기된 하이브리드 KEM을 쓰는 카드로는 더 이상 키를 보낼 수 없습니다.
-- KEM 키를 교체한 뒤에는 이전 카드로 봉인된 봉투를 받을 수 없습니다. 갱신 전에 대기 중인 봉투를 먼저 수락하세요.
-- 봉투에 송신자의 감사 로그 head가 담기며 1.0.0은 이를 읽지 못합니다. 그룹의 모든 구성원을 함께 업그레이드하세요.
+### 1.0.0에서 업그레이드
+
+이 버전은 1.0.0과 어느 방향으로도 봉투를 주고받을 수 없고, 1.0.0에서 만든 노드는 카드를 갱신해야 합니다. 그룹은 다음 순서로 업그레이드하세요.
+
+1. 키 전송을 멈춥니다. 모든 노드가 아직 1.0.0일 때 대기 중인 봉투를 `inbox accept`와 `inbox reject`로 모두 처리하고, 오프라인 봉투 파일도 모두 `key receive`로 가져옵니다. 1.0.0이 만든 봉투에는 감사 head가 없으므로 이 버전은 그런 봉투를 모두 거부합니다.
+2. 그룹의 모든 구성원을 함께 업그레이드합니다. 봉투에 송신자의 감사 로그 head가 담기며 1.0.0은 이를 읽지 못합니다.
+3. 모든 노드에서 `card renew`를 실행합니다. 1.0.0에서 만든 노드는 TLS 개인키를 코어 밖에 두었으므로, 갱신해야 `kmsd`, `key push`, `peer health`, `audit verify --peer`를 쓸 수 있습니다.
+4. 새 카드와 지문을 모든 구성원에게 보냅니다. 구성원은 별도 채널로 지문을 확인한 뒤 `member add`로 등록합니다. 그다음 `kmsd`를 다시 시작합니다.
+
+폐기된 하이브리드 KEM을 쓰는 카드로는 키를 보낼 수 없고, 그 카드의 노드도 `card renew`를 실행하기 전에는 키를 받을 수 없습니다.
 
 ## kmsctl 명령 참조
 
@@ -415,6 +421,7 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | `transport: socket directory ... is writable by other users`                     | 소켓 디렉토리에서 그룹과 기타 사용자의 쓰기 권한을 빼야 합니다.                                                                |
 | `node: tls key is held outside the core, ...`                                    | 1.0.0에서 만든 노드입니다. `card renew`를 실행하고 새 카드와 지문을 구성원에게 보낸 뒤 kmsd를 다시 시작해야 합니다.                        |
 | `node: member card uses a retired kem, ...`                                      | 구성원에게 `card renew`를 요청한 뒤 새 카드를 등록해야 합니다.                                                           |
+| `exchange: malformed object: envelope from pairier 1.0.0 ...`                    | 1.0.0이 만든 봉투이며 이 버전은 받지 않습니다. 송신자가 업그레이드한 뒤 키를 다시 보내야 합니다.                         |
 | `node: member identity key differs from the registered card`                     | 등록된 구성원의 갱신 카드가 아닙니다. 별도 채널로 지문을 확인해야 합니다.                                                          |
 | `node: member audit head conflicts with a head witnessed earlier`                | 송신자의 감사 로그가 분기했거나 되돌려졌습니다. 송신자 노드를 조사해야 합니다. 백업 복원임을 별도 채널로 확인한 경우에만 `witness/<member>.json`을 지웁니다. |
 | `` linker `link.exe` not found ``                                                | Windows 네이티브 빌드는 지원하지 않습니다. WSL2 안에서 빌드해야 합니다([빌드](#빌드) 참고).                                        |
