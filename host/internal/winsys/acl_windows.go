@@ -140,15 +140,18 @@ func privateSDDL(kind string, me *syscall.SID) (string, error) {
 	}
 	switch kind {
 	case "dir":
-		return fmt.Sprintf("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;%s)", s), nil
+		return fmt.Sprintf("O:%sD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;%s)", s, s), nil
 	case "file":
-		return fmt.Sprintf("D:P(A;;FA;;;SY)(A;;FA;;;%s)", s), nil
+		return fmt.Sprintf("O:%sD:P(A;;FA;;;SY)(A;;FA;;;%s)", s, s), nil
 	default:
-		return fmt.Sprintf("D:P(A;;GA;;;SY)(A;;GA;;;%s)", s), nil
+		return fmt.Sprintf("O:%sD:P(A;;GA;;;SY)(A;;GA;;;%s)", s, s), nil
 	}
 }
 
 func PrivateAttributes(kind string) (*syscall.SecurityAttributes, func(), error) {
+	if ownerErr != nil {
+		return nil, nil, ownerErr
+	}
 	me, err := CurrentUserSID()
 	if err != nil {
 		return nil, nil, err
@@ -170,6 +173,9 @@ func PrivateAttributes(kind string) (*syscall.SecurityAttributes, func(), error)
 }
 
 func SetPrivate(path string, kind string) error {
+	if ownerErr != nil {
+		return ownerErr
+	}
 	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return err
@@ -177,6 +183,26 @@ func SetPrivate(path string, kind string) error {
 	me, err := CurrentUserSID()
 	if err != nil {
 		return err
+	}
+	owner, free, err := pathOwner(path)
+	if err != nil {
+		return err
+	}
+	owned := equalSID(me, owner)
+	free()
+	if !owned {
+		r, _, _ := procSetNamedSecurityInfoW.Call(
+			uintptr(unsafe.Pointer(name)),
+			seFileObject,
+			ownerSecurityInformation,
+			uintptr(unsafe.Pointer(me)),
+			0,
+			0,
+			0,
+		)
+		if r != 0 {
+			return fmt.Errorf("winsys: set owner for %s: %w", path, syscall.Errno(r))
+		}
 	}
 	sddl, err := privateSDDL(kind, me)
 	if err != nil {

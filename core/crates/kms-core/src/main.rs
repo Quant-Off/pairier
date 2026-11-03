@@ -52,7 +52,7 @@ fn run(argv: &[String]) -> Result<(), String> {
 }
 
 fn harden(cfg: &Config) -> Result<(), String> {
-    kms_sys::harden::restrict_umask();
+    kms_sys::harden::restrict_umask().map_err(|e| e.to_string())?;
     kms_sys::harden::disable_core_dumps().map_err(|e| e.to_string())?;
     kms_sys::harden::deny_ptrace().map_err(|e| e.to_string())?;
     kms_sys::harden::no_new_privs().map_err(|e| e.to_string())?;

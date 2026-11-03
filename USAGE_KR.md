@@ -394,7 +394,7 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 ```
 
 - 디렉토리는 `0700`이고 현재 사용자 소유여야 하며, 파일에는 그룹과 기타 권한이 없어야 합니다. 심볼릭 링크는 열지 않습니다.
-- Windows에서는 디렉토리와 그 안의 모든 파일이 현재 사용자 소유이고, 그 사용자와 SYSTEM에게만 접근을 허용하는 DACL을 가져야 합니다. `kmsctl init`이 디렉토리를 그렇게 만듭니다. Administrators나 다른 주체의 항목이 있으면 거부되고, 네트워크 드라이브도 거부됩니다.
+- Windows에서는 디렉토리와 그 안의 모든 파일이 현재 사용자 소유이고, 그 사용자와 SYSTEM에게만 접근을 허용하는 DACL을 가져야 합니다. `kmsctl init`이 디렉토리를 그렇게 만듭니다. Administrators나 다른 주체의 항목이 있으면 거부되고, 네트워크 드라이브도 거부됩니다. `kmsctl`이나 `kmsd`를 관리자 권한으로 올려 실행하는 것은 권장하지 않지만, 토큰의 기본 소유자를 설정하므로 그렇게 만든 파일도 사용자 소유입니다.
 - 저장된 메타데이터와 공개키는 사용할 때마다 코어가 blob에서 다시 계산한 값과 대조합니다.
 - 백업에는 `root.key`가 포함되기 때문에 **백업 매체도 루트 키와 같은 수준으로 보호**해야 합니다.
 
@@ -447,5 +447,6 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | `node: member audit head conflicts with a head witnessed earlier`                | 송신자의 감사 로그가 분기했거나 되돌려졌습니다. 송신자 노드를 조사해야 합니다. 백업 복원임을 별도 채널로 확인한 경우에만 `witness/<member>.json`을 지웁니다. |
 | `` linker `link.exe` not found ``                                                | Windows에 C++ 워크로드가 포함된 Visual Studio Build Tools가 없습니다([빌드](#빌드) 참고).                               |
 | `store: insecure directory: ... grants access to other users`                    | Windows에서 노드 디렉토리의 DACL에 나와 SYSTEM 외의 주체, 보통 상속된 Administrators 항목이 있습니다. `kmsctl init`으로 만들거나 `icacls DIR /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" "SYSTEM:(OI)(CI)F"`를 실행해야 합니다. |
+| `store: insecure directory: ... is not owned by the current user`                | Windows에서 다른 계정이나 관리자 권한으로 올린 도구가 만든 파일이나 디렉토리라 소유자가 Administrators입니다. `icacls PATH /setowner "%USERNAME%" /T`로 소유권을 가져오거나 `kmsctl init`으로 다시 만들어야 합니다. 루트 키는 코어가 `object is not owned by the current user`로 같은 상황을 보고합니다. |
 | `store: insecure directory: ... is on a network drive`                           | 노드 디렉토리를 로컬 볼륨으로 옮겨야 합니다.                                                                           |
 | `transport: --socket: unsupported`                                               | Windows에서는 단독 소켓 모드를 쓸 수 없습니다. `kmsctl`이나 `kmsd`가 코어를 기동하게 해야 합니다.                                  |

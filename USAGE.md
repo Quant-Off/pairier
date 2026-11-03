@@ -394,7 +394,7 @@ The directory that holds the socket must be owned by the core user or root. A di
 ```
 
 - The directory must be `0700` and owned by the current user, and files must have no group or other permissions. Symbolic links are never opened.
-- On Windows the directory and every file in it must be owned by the current user and carry a DACL that grants access only to that user and SYSTEM. `kmsctl init` creates the directory that way; an entry for Administrators or any other principal is refused. Network drives are refused.
+- On Windows the directory and every file in it must be owned by the current user and carry a DACL that grants access only to that user and SYSTEM. `kmsctl init` creates the directory that way; an entry for Administrators or any other principal is refused. Network drives are refused. Running `kmsctl` or `kmsd` elevated is not recommended, but the files they create are still owned by you because they set the default owner of their token.
 - On every use, stored metadata and public keys are checked against values the core recomputes from the blob.
 - Backups include `root.key`, so **backup media must be protected at the same level as the root key**.
 
@@ -447,5 +447,6 @@ The directory that holds the socket must be owned by the core user or root. A di
 | `node: member audit head conflicts with a head witnessed earlier`                | The sender's audit log forked or was rolled back. Investigate the sender's node. Delete `witness/<member>.json` only after confirming a backup restore over a separate channel. |
 | `` linker `link.exe` not found ``                                                | Visual Studio Build Tools with the C++ workload are missing on Windows (see [Build](#build)).                                                                                   |
 | `store: insecure directory: ... grants access to other users`                    | On Windows the node directory has a DACL entry for someone other than you and SYSTEM, usually inherited Administrators. Create it with `kmsctl init`, or run `icacls DIR /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" "SYSTEM:(OI)(CI)F"`. |
+| `store: insecure directory: ... is not owned by the current user`                | On Windows the file or directory was created by another account, or by a tool running elevated, so its owner is Administrators. Take ownership with `icacls PATH /setowner "%USERNAME%" /T` or recreate it with `kmsctl init`. The core reports the root key the same way as `object is not owned by the current user`. |
 | `store: insecure directory: ... is on a network drive`                           | Move the node directory to a local volume.                                                                                                                                      |
 | `transport: --socket: unsupported`                                               | The standalone socket mode is not available on Windows. Let `kmsctl` or `kmsd` start the core.                                                                                  |

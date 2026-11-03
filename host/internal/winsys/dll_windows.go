@@ -25,6 +25,7 @@ var (
 	procGetAclInformation           = advapi32.NewProc("GetAclInformation")
 	procGetAce                      = advapi32.NewProc("GetAce")
 	procEqualSid                    = advapi32.NewProc("EqualSid")
+	procSetTokenInformation         = advapi32.NewProc("SetTokenInformation")
 )
 
 const (

@@ -120,7 +120,7 @@ Envelope layer:
 
 ## Local key storage
 
-- The node directory must be `0700` and owned by the current user, and files must have no group or other permissions. On Windows the directory and every file must be owned by the current user with a DACL that grants access only to that user and SYSTEM, and network drives are refused. Symbolic links and other reparse points are never followed.
+- The node directory must be `0700` and owned by the current user, and files must have no group or other permissions. On Windows the directory and every file must be owned by the current user with a DACL that grants access only to that user and SYSTEM, and network drives are refused. Before they create anything, the host and the core set the default owner of their access token to the current user, so files are owned by the user even in an elevated session. Symbolic links and other reparse points are never followed.
 - Records are written through a temporary file, synced, and moved into place, followed by a sync of the directory. Key records are write-once and are never overwritten.
 - `root.key` is created by the core with mode `0400`, or on Windows with an owner-only DACL. The core opens it without following links and requires a regular file owned by the current user, without group or other permissions, with a single link and exactly 32 bytes.
 - In the core the root key lives in a dedicated memory region with guard pages on both sides. The region is locked, excluded from core dumps on Linux, and zeroized when released.

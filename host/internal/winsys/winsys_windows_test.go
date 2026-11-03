@@ -155,3 +155,26 @@ func TestIsRemotePath(t *testing.T) {
 		t.Fatalf("unc remote=%v err=%v", remote, err)
 	}
 }
+
+func TestNewFilesAreOwnedByCurrentUser(t *testing.T) {
+	if ownerErr != nil {
+		t.Fatal(ownerErr)
+	}
+	me, err := CurrentUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "plain")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owner, free, err := pathOwner(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer free()
+	if !equalSID(me, owner) {
+		s, _ := owner.String()
+		t.Fatalf("new file owned by %s", s)
+	}
+}

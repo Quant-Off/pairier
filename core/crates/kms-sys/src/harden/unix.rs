@@ -1,9 +1,10 @@
 use crate::error::Error;
 
-pub fn restrict_umask() {
+pub fn restrict_umask() -> Result<(), Error> {
     unsafe {
         libc::umask(0o077);
     }
+    Ok(())
 }
 
 pub fn disable_core_dumps() -> Result<(), Error> {
@@ -116,7 +117,7 @@ mod tests {
 
     #[test]
     fn umask_is_restrictive() {
-        restrict_umask();
+        restrict_umask().unwrap();
         let prev = unsafe { libc::umask(0o077) };
         assert_eq!(prev, 0o077);
     }

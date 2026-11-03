@@ -71,7 +71,10 @@ fn create_with(path: &Path, attrs: &win::Attributes) -> Result<File, Error> {
 mod tests {
     use std::fs;
     use std::io::Write;
-    use std::path::PathBuf;
+    use std::os::windows::io::AsRawHandle;
+    use std::path::{Path, PathBuf};
+
+    use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
 
     use super::{create_private, create_with, open_private};
     use crate::win;
@@ -82,13 +85,36 @@ mod tests {
         p
     }
 
+    fn owner_of(p: &Path) -> win::Sid {
+        let f = fs::File::open(p).unwrap();
+        win::object_security(f.as_raw_handle(), SE_FILE_OBJECT)
+            .unwrap()
+            .owner
+            .unwrap()
+    }
+
+    #[test]
+    fn owner_is_set_explicitly_and_by_token_default() {
+        let me = win::current_user_sid().unwrap();
+        let p = temp_path("owner");
+        drop(create_private(&p).unwrap());
+        assert_eq!(owner_of(&p), me);
+        fs::remove_file(&p).unwrap();
+        crate::harden::restrict_umask().unwrap();
+        let sddl = format!("D:P(A;;FA;;;SY)(A;;FA;;;{})", me.display().unwrap());
+        let attrs = win::Attributes::from_sddl(&sddl).unwrap();
+        drop(create_with(&p, &attrs).unwrap());
+        assert_eq!(owner_of(&p), me);
+        fs::remove_file(&p).unwrap();
+    }
+
     #[test]
     fn creates_private_file_and_reopens() {
         let p = temp_path("ok");
         let mut f = create_private(&p).unwrap();
         f.write_all(b"secret").unwrap();
         drop(f);
-        assert!(open_private(&p).is_ok());
+        open_private(&p).unwrap();
         assert!(create_private(&p).is_err());
         fs::remove_file(&p).unwrap();
     }

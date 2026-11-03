@@ -11,12 +11,14 @@ use windows_sys::Win32::System::Diagnostics::Debug::{
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread};
 
 use crate::error::Error;
-use crate::win::SecurityDescriptor;
+use crate::win::{self, SecurityDescriptor};
 
 const PROCESS_SDDL: &str = "D:P(A;;GA;;;SY)(A;;0x00121001;;;OW)";
 const THREAD_SDDL: &str = "D:P(A;;GA;;;SY)(A;;0x00120801;;;OW)";
 
-pub fn restrict_umask() {}
+pub fn restrict_umask() -> Result<(), Error> {
+    win::adopt_owner()
+}
 
 pub fn disable_core_dumps() -> Result<(), Error> {
     unsafe {
@@ -76,7 +78,7 @@ mod tests {
         PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ,
     };
 
-    use super::{deny_ptrace, disable_core_dumps, lock_all_memory, no_new_privs, restrict_umask};
+    use super::{deny_ptrace, disable_core_dumps, lock_all_memory, no_new_privs};
     use crate::win;
 
     fn debug_privilege_enabled() -> bool {
@@ -164,9 +166,8 @@ mod tests {
     }
 
     #[test]
-    fn core_dumps_and_umask_are_no_ops() {
+    fn core_dumps_are_a_no_op() {
         disable_core_dumps().unwrap();
-        restrict_umask();
     }
 
     #[test]

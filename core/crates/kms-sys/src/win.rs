@@ -10,8 +10,9 @@ use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, CopySid,
     CreateWellKnownSid, DACL_SECURITY_INFORMATION, GetAce, GetAclInformation, GetLengthSid,
     GetSecurityDescriptorDacl, GetTokenInformation, IsValidSid, OWNER_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE, TOKEN_QUERY,
-    TOKEN_USER, TokenUser, WinLocalSystemSid,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE, SetTokenInformation,
+    TOKEN_ADJUST_DEFAULT, TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenOwner, TokenUser,
+    WinLocalSystemSid,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -223,7 +224,42 @@ impl Drop for SecurityDescriptor {
 }
 
 pub(crate) fn private_sddl(owner: &Sid) -> Result<String, Error> {
-    Ok(format!("D:P(A;;FA;;;SY)(A;;FA;;;{})", owner.display()?))
+    let sid = owner.display()?;
+    Ok(format!("O:{sid}D:P(A;;FA;;;SY)(A;;FA;;;{sid})"))
+}
+
+pub(crate) fn adopt_owner() -> Result<(), Error> {
+    let mut token: HANDLE = null_mut();
+    let opened = unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
+            &raw mut token,
+        )
+    };
+    if opened == 0 {
+        return Err(Error::last("OpenProcessToken"));
+    }
+    let result = unsafe { set_token_owner(token) };
+    unsafe {
+        CloseHandle(token);
+    }
+    result
+}
+
+unsafe fn set_token_owner(token: HANDLE) -> Result<(), Error> {
+    let user = unsafe { token_user_sid(token) }?;
+    let owner = TOKEN_OWNER {
+        Owner: user.as_psid(),
+    };
+    let len = u32::try_from(size_of::<TOKEN_OWNER>())
+        .map_err(|_| Error::invalid("SetTokenInformation", "size overflow"))?;
+    let rc =
+        unsafe { SetTokenInformation(token, TokenOwner, (&raw const owner).cast::<c_void>(), len) };
+    if rc == 0 {
+        return Err(Error::last("SetTokenInformation"));
+    }
+    Ok(())
 }
 
 pub(crate) struct Attributes {
