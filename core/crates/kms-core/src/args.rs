@@ -1,9 +1,9 @@
-use std::os::fd::RawFd;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Transport {
-    Fd(RawFd),
+    Fd(u64),
+    Handle(u64),
     Socket(PathBuf),
 }
 
@@ -29,7 +29,7 @@ pub(crate) enum Action {
     Version,
 }
 
-const USAGE: &str = "usage: kms-core (--fd N | --socket PATH) (--root-key-file PATH | --ephemeral-root) [--pqc] [--allow-unlocked-memory] [--peer-uid UID]\n       kms-core --generate-root-key PATH\n       kms-core --version";
+const USAGE: &str = "usage: kms-core (--fd N | --handle N | --socket PATH) (--root-key-file PATH | --ephemeral-root) [--pqc] [--allow-unlocked-memory] [--peer-uid UID]\n       kms-core --generate-root-key PATH\n       kms-core --version";
 
 pub(crate) fn parse(argv: &[String]) -> Result<Action, String> {
     let mut transport: Option<Transport> = None;
@@ -50,11 +50,13 @@ pub(crate) fn parse(argv: &[String]) -> Result<Action, String> {
         match flag.as_str() {
             "--fd" => {
                 let v = value()?;
-                let fd: RawFd = v.parse().map_err(|_| format!("invalid fd {v:?}"))?;
-                if fd < 0 {
-                    return Err(format!("invalid fd {v:?}"));
-                }
+                let fd: u64 = v.parse().map_err(|_| format!("invalid fd {v:?}"))?;
                 set_once(&mut transport, Transport::Fd(fd), "transport")?;
+            }
+            "--handle" => {
+                let v = value()?;
+                let handle: u64 = v.parse().map_err(|_| format!("invalid handle {v:?}"))?;
+                set_once(&mut transport, Transport::Handle(handle), "transport")?;
             }
             "--socket" => {
                 let v = value()?;
@@ -116,7 +118,8 @@ pub(crate) fn parse(argv: &[String]) -> Result<Action, String> {
         return Ok(Action::GenerateRootKey(path));
     }
 
-    let transport = transport.ok_or_else(|| format!("missing --fd or --socket\n{USAGE}"))?;
+    let transport =
+        transport.ok_or_else(|| format!("missing --fd, --handle or --socket\n{USAGE}"))?;
     let root =
         root.ok_or_else(|| format!("missing --root-key-file or --ephemeral-root\n{USAGE}"))?;
     Ok(Action::Serve(Config {
@@ -162,6 +165,17 @@ mod tests {
                 peer_uid: Some(42),
             })
         );
+        let h = parse(&args("--handle 1234 --ephemeral-root")).unwrap();
+        assert_eq!(
+            h,
+            Action::Serve(Config {
+                transport: Transport::Handle(1234),
+                root: RootSource::Ephemeral,
+                pqc: false,
+                allow_unlocked_memory: false,
+                peer_uid: None,
+            })
+        );
         let b = parse(&args("--socket /tmp/s --ephemeral-root")).unwrap();
         assert_eq!(
             b,
@@ -189,6 +203,8 @@ mod tests {
         assert!(parse(&args("--fd -1 --ephemeral-root")).is_err());
         assert!(parse(&args("--fd x --ephemeral-root")).is_err());
         assert!(parse(&args("--fd 3 --socket /s --ephemeral-root")).is_err());
+        assert!(parse(&args("--fd 3 --handle 4 --ephemeral-root")).is_err());
+        assert!(parse(&args("--handle x --ephemeral-root")).is_err());
         assert!(parse(&args("--fd 3 --ephemeral-root --root-key-file /k")).is_err());
         assert!(parse(&args("--fd")).is_err());
         assert!(parse(&args("--bogus")).is_err());

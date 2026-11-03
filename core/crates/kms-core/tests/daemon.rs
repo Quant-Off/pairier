@@ -1,3 +1,4 @@
+#![cfg(unix)]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -7,7 +8,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -291,7 +292,11 @@ fn same_uid_socket_is_owner_only() {
 fn foreign_uid_is_rejected_without_ending_the_daemon() {
     let dir = private_dir("foreign-dir");
     let sock = dir.join("core.sock");
-    let other = kms_sys::peer::current_uid().wrapping_add(1).to_string();
+    let other = fs::metadata(&dir)
+        .unwrap()
+        .uid()
+        .wrapping_add(1)
+        .to_string();
     let mut child = spawn(&[
         "--socket",
         sock.to_str().unwrap(),

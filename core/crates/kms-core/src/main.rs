@@ -68,9 +68,13 @@ fn harden(cfg: &Config) -> Result<(), String> {
 fn serve(cfg: &Config) -> Result<(), String> {
     harden(cfg)?;
 
-    let expected_uid = cfg.peer_uid.unwrap_or_else(kms_sys::peer::current_uid);
-    let (mut stream, cred) =
-        transport::acquire(&cfg.transport, expected_uid).map_err(|e| format!("transport: {e}"))?;
+    let expected = match cfg.peer_uid {
+        Some(uid) => kms_sys::peer::Expected::uid(uid),
+        None => kms_sys::peer::Expected::current(),
+    }
+    .map_err(|e| format!("peer identity: {e}"))?;
+    let (mut stream, peer) =
+        transport::acquire(&cfg.transport, &expected).map_err(|e| format!("transport: {e}"))?;
 
     let root = match &cfg.root {
         RootSource::File(path) => {
@@ -85,7 +89,7 @@ fn serve(cfg: &Config) -> Result<(), String> {
     let engine = Engine::new(root, cfg.pqc);
     log(&format!(
         "{VERSION} serving peer pid {} (fips={}, pqc={})",
-        cred.pid.map_or_else(|| "?".to_owned(), |p| p.to_string()),
+        peer.pid.map_or_else(|| "?".to_owned(), |p| p.to_string()),
         Engine::fips_mode(),
         engine.pqc_available()
     ));

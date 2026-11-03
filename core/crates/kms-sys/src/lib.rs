@@ -4,10 +4,11 @@
 compile_error!("kms-sys supports only linux, macos and windows targets");
 
 mod error;
-#[cfg(unix)]
+pub mod fs;
 pub mod harden;
 pub mod mem;
-#[cfg(unix)]
 pub mod peer;
+#[cfg(windows)]
+mod win;
 
 pub use error::Error;
