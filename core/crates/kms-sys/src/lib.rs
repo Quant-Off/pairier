@@ -8,6 +8,8 @@ pub mod fs;
 pub mod harden;
 pub mod mem;
 pub mod peer;
+#[cfg(all(windows, feature = "test-support"))]
+pub mod testing;
 #[cfg(windows)]
 mod win;
 

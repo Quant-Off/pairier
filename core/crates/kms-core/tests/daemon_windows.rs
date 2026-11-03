@@ -6,24 +6,14 @@
     clippy::arithmetic_side_effects
 )]
 
-use core::ptr::{null, null_mut};
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
 use kms_wire::msg::{HelloRequest, HelloResponse, Message, PingRequest, PingResponse};
 use kms_wire::{HEADER_LEN, Header, Kind, PROTOCOL_VERSION, Status};
-use windows_sys::Win32::Foundation::{
-    GENERIC_READ, GENERIC_WRITE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
-};
-use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
-};
-use windows_sys::Win32::System::Pipes::{
-    CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
-};
 
 fn scratch(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -32,49 +22,8 @@ fn scratch(tag: &str) -> PathBuf {
     p
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(core::iter::once(0)).collect()
-}
-
 fn pipe_pair(tag: &str) -> (File, OwnedHandle) {
-    let name = wide(&format!(
-        r"\\.\pipe\kms-core-it-{}-{tag}",
-        std::process::id()
-    ));
-    let server = unsafe {
-        CreateNamedPipeW(
-            name.as_ptr(),
-            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            1,
-            65536,
-            65536,
-            0,
-            null(),
-        )
-    };
-    assert_ne!(server, INVALID_HANDLE_VALUE);
-    let client = unsafe {
-        CreateFileW(
-            name.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE,
-            0,
-            null(),
-            OPEN_EXISTING,
-            0,
-            null_mut(),
-        )
-    };
-    assert_ne!(client, INVALID_HANDLE_VALUE);
-    unsafe {
-        SetHandleInformation(client, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
-    }
-    unsafe {
-        (
-            File::from_raw_handle(server),
-            OwnedHandle::from_raw_handle(client),
-        )
-    }
+    kms_sys::testing::pipe_pair(tag).unwrap()
 }
 
 fn spawn(args: &[String]) -> Child {

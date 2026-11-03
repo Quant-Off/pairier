@@ -9,6 +9,9 @@ publish.workspace = true
 [dependencies]
 zeroize = "1"
 
+[features]
+test-support = []
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
