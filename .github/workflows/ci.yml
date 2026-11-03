@@ -2,9 +2,13 @@ name: ci
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     tags: ["v*"]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -47,6 +51,55 @@ jobs:
           cargo test --frozen -p kms-engine --features pqc
           cargo test --frozen --no-default-features --features non-fips
 
+  core-windows:
+    env:
+      CARGO_NET_OFFLINE: "true"
+      AWS_LC_SYS_PREBUILT_NASM: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: git settings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: nasm
+        if: runner.arch == 'X64'
+        run: |
+          choco install nasm --no-progress -y
+          echo 'C:\Program Files\NASM' >> "$GITHUB_PATH"
+      - name: toolchain
+        run: |
+          cd core && rustup show active-toolchain
+          cmake --version
+      - name: lint
+        run: |
+          cd core
+          cargo fmt --all --check
+          cargo clippy --frozen -p kms-sys --all-targets -- -D warnings
+          cargo clippy --frozen -p kms-core --all-targets --features pqc -- -D warnings
+      - name: test
+        run: |
+          cd core
+          cargo test --frozen -p kms-sys
+          cargo test --frozen -p kms-sys process_dacl -- --nocapture
+          cargo test --frozen -p kms-engine
+          cargo test --frozen -p kms-engine --features pqc
+          cargo test --frozen -p kms-core --features pqc
+      - name: release build
+        run: |
+          cd core
+          cargo build --frozen --release -p kms-core --features pqc
+          out=$(target/release/kms-core.exe --version)
+          echo "$out"
+          case "$out" in *"fips=false"*) ;; *) echo "unexpected fips mode"; exit 1;; esac
+
   host:
     env:
       CARGO_NET_OFFLINE: "true"
@@ -72,6 +125,47 @@ jobs:
           cd host
           go test -run='^$' -fuzz=FuzzDecodeHeader -fuzztime=20s ./internal/wire/
           go test -run='^$' -fuzz=FuzzDecodeBody -fuzztime=20s ./internal/wire/
+
+  host-windows:
+    env:
+      CARGO_NET_OFFLINE: "true"
+      AWS_LC_SYS_PREBUILT_NASM: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: git settings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: host/go.mod
+          cache: false
+      - name: nasm
+        if: runner.arch == 'X64'
+        run: |
+          choco install nasm --no-progress -y
+          echo 'C:\Program Files\NASM' >> "$GITHUB_PATH"
+      - name: toolchain
+        run: cd core && rustup show active-toolchain
+      - name: core for tests
+        run: cd core && cargo build --frozen -p kms-core --features pqc
+      - name: lint
+        run: |
+          cd host
+          test -z "$(gofmt -l .)"
+          go vet ./...
+      - name: test
+        run: |
+          cd host
+          KMS_CORE_BIN="$GITHUB_WORKSPACE/core/target/debug/kms-core.exe" go test ./...
 
   fips:
     env:
@@ -159,5 +253,64 @@ jobs:
           name: pairier-${{ matrix.os }}
           path: |
             dist/*.tar.gz
+            dist/*.cdx.json
+            dist/SHA256SUMS
+
+  dist-windows:
+    needs: [core-windows, host-windows]
+    env:
+      CARGO_NET_OFFLINE: "true"
+      AWS_LC_SYS_PREBUILT_NASM: "0"
+      GOFIPS140: certified
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: git settings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: host/go.mod
+          cache: false
+      - name: nasm
+        if: runner.arch == 'X64'
+        run: |
+          choco install nasm --no-progress -y
+          echo 'C:\Program Files\NASM' >> "$GITHUB_PATH"
+      - name: toolchain
+        run: cd core && rustup show active-toolchain
+      - name: dist
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml | head -1)
+          epoch=$(git log -1 --format=%ct)
+          case "$RUNNER_ARCH" in
+            X64) arch=amd64 ;;
+            ARM64) arch=arm64 ;;
+            *) echo "unknown arch $RUNNER_ARCH"; exit 1 ;;
+          esac
+          root=$(cygpath -w "$PWD")
+          (cd core && RUSTFLAGS="--remap-path-prefix=$root=/pairier" cargo build --release --frozen -p kms-core --features pqc)
+          (cd host && go build -ldflags "-s -w -X main.version=$version" -o bin/ ./cmd/...)
+          mkdir -p dist
+          python -I scripts/sbom.py --version "$version" --cargo cargo --core-flags "--features pqc" \
+            --go-binary host/bin/kmsd.exe --go-binary host/bin/kmsctl.exe --epoch "$epoch" --out dist/sbom.cdx.json
+          DIST_ARCH=$arch PYTHON=python SOURCE_DATE_EPOCH=$epoch sh scripts/dist.sh "$version" \
+            core/target/release/kms-core.exe host/bin/kmsd.exe host/bin/kmsctl.exe dist dist/sbom.cdx.json
+          rm -f dist/sbom.cdx.json
+          cat dist/SHA256SUMS
+          unzip -l dist/*.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pairier-${{ matrix.os }}
+          path: |
+            dist/*.zip
             dist/*.cdx.json
             dist/SHA256SUMS

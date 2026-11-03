@@ -26,11 +26,11 @@ Please include the affected component and version (release or commit hash), step
 
 | Version            | Supported |
 |--------------------|-----------|
-| 2.0.x              | Yes       |
+| 1.1.x              | Yes       |
 | 1.0.x              | No        |
 | Unreleased commits | No        |
 
-Security fixes are released only for the latest 2.0.x release. To move off 1.0.x, follow [Upgrading from 1.0.0](USAGE.md#upgrading-from-100).
+Security fixes are released only for the latest 1.1.x release. To move off 1.0.x, follow [Upgrading from 1.0.0](USAGE.md#upgrading-from-100).
 
 ## Scope
 
@@ -80,10 +80,10 @@ pairier is designed under the Zero-Trust and Air-Gapped Ready principles.
 
 ## Host and core channel
 
-- The host creates a `socketpair` and passes one end to `kms-core` as fd 3. No socket path appears on the filesystem and nothing listens, so no other process can connect.
-- The core is started with an empty environment, `/` as its working directory and no standard input or output. Only standard error and fd 3 are inherited, and the core closes every other fd itself.
-- Before it accepts the channel or loads the root key, the core sets `umask 077`, disables core dumps, denies `ptrace`, sets `no_new_privs` and, on Linux, locks all memory with `mlockall`. If memory cannot be locked, the core refuses to start unless `--allow-unlocked-memory` is given.
-- The core accepts the channel only if it is an `AF_UNIX` stream socket and the peer's UID matches its own, or the `--peer-uid` given in standalone socket mode.
+- On Linux and macOS the host creates a `socketpair` and passes one end to `kms-core` as fd 3. On Windows it creates a named pipe with a random name, a DACL that admits only the current user, `PIPE_REJECT_REMOTE_CLIENTS` and a single instance, opens the client end itself and passes that handle to the core (`--handle`). In both cases nothing listens, so no other process can connect.
+- The core is started with an empty environment, the filesystem root as its working directory and no standard input or output. Only standard error and the channel are inherited. On Linux and macOS the core closes every other fd itself; on Windows the host limits inheritance to the channel handle.
+- Before it accepts the channel or loads the root key, the core sets `umask 077`, disables core dumps, denies `ptrace`, sets `no_new_privs` and, on Linux, locks all memory with `mlockall`. On Windows it instead puts a DACL on its own process and thread objects that leaves the owner only terminate, wait and limited query rights, and locks only its key buffers with `VirtualLock`. If memory cannot be locked, the core refuses to start unless `--allow-unlocked-memory` is given. See [Platform differences](#platform-differences).
+- The core accepts the channel only if it is an `AF_UNIX` stream socket whose peer UID matches its own (or the `--peer-uid` given in standalone socket mode), or on Windows the client end of a pipe whose server process runs under the same user SID.
 - Every frame has a fixed 16-byte header, length-prefixed fields and a 1 MiB body limit. `HELLO` must come first with a matching protocol version, trailing bytes are rejected, and any framing violation ends the session.
 - The host applies a fixed deadline to every core call (10 seconds by default). A cancelled request does not break the shared core session, and a core that does not exit in time is killed.
 
@@ -120,13 +120,33 @@ Envelope layer:
 
 ## Local key storage
 
-- The node directory must be `0700` and owned by the current user, and files must have no group or other permissions. Symbolic links are never followed.
+- The node directory must be `0700` and owned by the current user, and files must have no group or other permissions. On Windows the directory and every file must be owned by the current user with a DACL that grants access only to that user and SYSTEM, and network drives are refused. Before they create anything, the host and the core set the default owner of their access token to the current user, so files are owned by the user even in an elevated session. Symbolic links and other reparse points are never followed.
 - Records are written through a temporary file, synced, and moved into place, followed by a sync of the directory. Key records are write-once and are never overwritten.
-- `root.key` is created by the core with mode `0400`. The core opens it without following links and requires a regular file owned by the current user, without group or other permissions, with a single link and exactly 32 bytes.
-- In the core the root key lives in a dedicated memory region with guard pages on both sides. The region is locked, excluded from core dumps, and zeroized when released.
+- `root.key` is created by the core with mode `0400`, or on Windows with an owner-only DACL. The core opens it without following links and requires a regular file owned by the current user, without group or other permissions, with a single link and exactly 32 bytes.
+- In the core the root key lives in a dedicated memory region with guard pages on both sides. The region is locked, excluded from core dumps on Linux, and zeroized when released.
 - Each blob is sealed with AES-256-GCM under a key and nonce derived by HKDF-SHA256 from the root key and a fresh 32-byte salt. The blob header (version, algorithm, usage, key id, label) is fully authenticated as associated data.
 - The core rejects every operation outside the usage assigned to a key. On every use, the host checks stored metadata and public keys against the values the core recomputes from the blob.
 - Node start, key generation, encryption, decryption, member changes, sent and received envelopes, inbox decisions, card renewal and witness conflicts are written to the hash-chained audit log, and each entry is signed with the core's audit key.
+
+## Platform differences
+
+The host and the wire formats behave the same everywhere, so nodes on different platforms interoperate. What the core can enforce against the local system differs.
+
+| Protection                              | Linux                        | macOS                       | Windows                                                                                             |
+|-----------------------------------------|------------------------------|-----------------------------|-----------------------------------------------------------------------------------------------------|
+| All core memory locked                  | Yes (`mlockall`)             | No                          | No                                                                                                  |
+| Key buffers locked and guarded          | Yes                          | Yes                         | Yes (`VirtualLock`)                                                                                 |
+| Core dumps disabled                     | Yes                          | Yes                         | No per-process control. Error reporting dialogs are suppressed                                      |
+| Same-user debugger attach blocked       | Yes (`PR_SET_DUMPABLE`)      | Yes (`PT_DENY_ATTACH`)      | Process and thread DACL. An elevated administrator with `SeDebugPrivilege` bypasses it, like root   |
+| `no_new_privs`                          | Yes                          | Not applicable              | Not applicable                                                                                      |
+| Peer verification                       | UID (`SO_PEERCRED`)          | UID (`getpeereid`)          | User SID of the pipe server process                                                                 |
+| File protection                         | `0700` and `0600` with owner | Same                        | Owner-only DACL with owner SID                                                                      |
+| FIPS core                               | Static (`FIPS=1`)            | Not static                  | Not available                                                                                       |
+| Go FIPS mode                            | `GOFIPS140=certified`        | Same                        | Same. Windows is not confirmed as a tested operating environment of the module                      |
+| Reproducible release                    | Yes                          | No release                  | No                                                                                                  |
+| Standalone `--socket` mode              | Yes                          | Yes                         | No                                                                                                  |
+
+Windows support is experimental in 1.1.0. CI builds and tests it on x86_64 and ARM64, but it has not been run on a managed workstation with EDR software.
 
 ## Known limitations
 
@@ -147,9 +167,12 @@ These are design choices or open items that are disclosed here rather than treat
 - The configuration file is checked for group and other write permission but not for its owner, and the core binary it names is not checked for owner or permissions. Keep both owned by the node user or root.
 - The `fips` feature selects the AWS-LC FIPS 140-3 validated module, but whether every algorithm listed below is covered by the module's certificate has not been confirmed. Check the CMVP certificate of the exact module version before relying on FIPS for a given algorithm. CI does not yet assert that `kmsd` reports `go_fips=true`.
 - On macOS the core runs without locked memory and the FIPS core is not statically linked. macOS is for development only.
+- On Windows there is no equivalent of `mlockall` or `PR_SET_DUMPABLE`. Only the key buffers are locked, an administrator can configure Windows Error Reporting to write process dumps, and the process DACL does not stop an elevated administrator holding `SeDebugPrivilege`.
+- The Windows core is built without the FIPS module, because aws-lc-fips-sys requires a shared libcrypto there. Whether the Go Cryptographic Module certificate lists a Windows operating environment has not been confirmed.
+- Windows release archives are built in CI and are not reproducible. The `SHA256SUMS` signature covers them. The binaries are not Authenticode signed, so SmartScreen warns on first run, and `kmsd` has no service wrapper.
 - `make audit` uses a local RustSec advisory database that must be refreshed on a connected machine.
 - The Rust wire decoder mutation test is seeded, not coverage guided.
-- Linux x86_64 is covered by CI only. Offline verification has been done on Linux arm64.
+- Linux x86_64 and both Windows architectures are covered by CI only. Offline verification has been done on Linux arm64.
 
 ## Verifying a release
 

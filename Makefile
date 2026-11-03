@@ -1,7 +1,3 @@
-ifeq ($(OS),Windows_NT)
-$(error native Windows builds are not supported; build inside WSL2 with Ubuntu 24.04, see USAGE.md)
-endif
-
 GO    ?= go
 CARGO ?= cargo
 
@@ -15,7 +11,28 @@ CORE_FLAGS := --no-default-features --features fips,$(CORE_FEATURES)
 else
 CORE_FLAGS := --features $(CORE_FEATURES)
 endif
-KMS_CORE_BIN  := $(abspath $(CORE_DIR)/target/debug/kms-core)
+ifeq ($(OS),Windows_NT)
+EXE    := .exe
+RACE   :=
+CGO    := 0
+PYTHON ?= python
+CORE_TEST_FEATURES := --features kms-core/pqc,kms-engine/pqc
+DIST_ARCH    ?= $(shell echo "$${PROCESSOR_ARCHITEW6432:-$$PROCESSOR_ARCHITECTURE}" | tr '[:upper:]' '[:lower:]')
+SRC_ROOT     := $(shell cygpath -w "$(abspath .)" 2>/dev/null || echo "$(abspath .)")
+KMS_CORE_BIN := $(shell cygpath -m "$(abspath $(CORE_DIR)/target/debug/kms-core.exe)" 2>/dev/null || echo "$(abspath $(CORE_DIR)/target/debug/kms-core.exe)")
+ifeq ($(FIPS),1)
+$(error the FIPS core is not available on Windows)
+endif
+else
+EXE    :=
+RACE   := -race
+CGO    := 1
+PYTHON ?= python3
+CORE_TEST_FEATURES := --all-features
+SRC_ROOT     := $(abspath .)
+KMS_CORE_BIN := $(abspath $(CORE_DIR)/target/debug/kms-core)
+endif
+export PYTHON DIST_ARCH
 
 export GOTOOLCHAIN := local
 export GOPROXY     := off
@@ -30,7 +47,7 @@ GO_LDFLAGS     := -s -w -X main.version=$(VERSION)
 SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
 export SOURCE_DATE_EPOCH
 DIST_DIR       := dist
-CORE_RELEASE   := $(abspath $(CORE_DIR)/target/release/kms-core)
+CORE_RELEASE   := $(abspath $(CORE_DIR)/target/release/kms-core$(EXE))
 CARGO_NET      := $(CARGO) +$(RUST_TOOLCHAIN)
 CORE_MANIFEST  := --manifest-path $(CORE_DIR)/Cargo.toml
 GO_NET         := GOPROXY=https://proxy.golang.org,direct GOFLAGS=-trimpath $(GO)
@@ -42,7 +59,7 @@ all: build
 build: build-core build-host
 
 build-core:
-	cd $(CORE_DIR) && RUSTFLAGS="--remap-path-prefix=$(abspath .)=/pairier $(RUSTFLAGS)" $(CARGO) build --release --frozen -p kms-core $(CORE_FLAGS)
+	cd $(CORE_DIR) && RUSTFLAGS="--remap-path-prefix=$(SRC_ROOT)=/pairier $(RUSTFLAGS)" $(CARGO) build --release --frozen -p kms-core $(CORE_FLAGS)
 
 build-host:
 	cd $(HOST_DIR) && $(GO) build -ldflags "$(GO_LDFLAGS)" -o bin/ ./cmd/...
@@ -50,17 +67,17 @@ build-host:
 test: test-core test-host
 
 test-core:
-	cd $(CORE_DIR) && $(CARGO) test --frozen --all-features
+	cd $(CORE_DIR) && $(CARGO) test --frozen $(CORE_TEST_FEATURES)
 
 test-host:
 	cd $(CORE_DIR) && $(CARGO) build --frozen -p kms-core --features pqc
-	cd $(HOST_DIR) && CGO_ENABLED=1 KMS_CORE_BIN=$(KMS_CORE_BIN) $(GO) test -race ./...
+	cd $(HOST_DIR) && CGO_ENABLED=$(CGO) KMS_CORE_BIN=$(KMS_CORE_BIN) $(GO) test $(RACE) ./...
 
 lint: lint-core lint-host
 
 lint-core:
 	cd $(CORE_DIR) && $(CARGO) fmt --all --check
-	cd $(CORE_DIR) && $(CARGO) clippy --frozen --all-targets --all-features -- -D warnings
+	cd $(CORE_DIR) && $(CARGO) clippy --frozen --all-targets $(CORE_TEST_FEATURES) -- -D warnings
 
 lint-host:
 	cd $(HOST_DIR) && test -z "$$(gofmt -l .)"
@@ -80,10 +97,10 @@ update:
 
 dist: build
 	mkdir -p $(DIST_DIR)
-	python3 -I scripts/sbom.py --version $(VERSION) --cargo "$(CARGO)" --core-flags "$(CORE_FLAGS)" \
-		--go-binary $(HOST_DIR)/bin/kmsd --go-binary $(HOST_DIR)/bin/kmsctl \
+	$(PYTHON) -I scripts/sbom.py --version $(VERSION) --cargo "$(CARGO)" --core-flags "$(CORE_FLAGS)" \
+		--go-binary $(HOST_DIR)/bin/kmsd$(EXE) --go-binary $(HOST_DIR)/bin/kmsctl$(EXE) \
 		--epoch $(SOURCE_DATE_EPOCH) --out $(DIST_DIR)/sbom.cdx.json
-	./scripts/dist.sh $(VERSION) $(CORE_RELEASE) $(HOST_DIR)/bin/kmsd $(HOST_DIR)/bin/kmsctl $(DIST_DIR) $(DIST_DIR)/sbom.cdx.json
+	./scripts/dist.sh $(VERSION) $(CORE_RELEASE) $(HOST_DIR)/bin/kmsd$(EXE) $(HOST_DIR)/bin/kmsctl$(EXE) $(DIST_DIR) $(DIST_DIR)/sbom.cdx.json
 	rm -f $(DIST_DIR)/sbom.cdx.json
 
 sign:

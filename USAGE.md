@@ -25,11 +25,12 @@ Every time `kmsctl` and `kmsd` run, they start `kms-core` as a child process and
 
 Requirements:
 
-- Rust `1.95.0` (pinned by `core/rust-toolchain.toml`), Go `1.27.2`
+- Rust `1.95.0` (pinned by `core/rust-toolchain.toml`), Go `1.27.3`
 - FIPS core build: `cmake`, `perl`, Go (static linking is supported only on Linux x86_64/aarch64)
 - Distribution build: GNU tar (`brew install gnu-tar` on macOS), `python3`
+- Windows: Visual Studio Build Tools with the C++ workload (MSVC), `cmake`, NASM (x86_64 only) and Git for Windows. Run `make` from Git Bash with GNU make from MSYS2 or Chocolatey, or run the commands in the `Makefile` directly.
 
-Builds run on Linux and macOS. Native Windows builds are not supported, because the core's isolation depends on Unix process and file permission features such as the inherited socket, the peer UID check, `ptrace` denial and `0700` permissions. On Windows, install the requirements above inside WSL2 with Ubuntu 24.04 and build there. Keep the repository and the node directory on the WSL file system, such as under `~/`. Windows drives under `/mnt/c` cannot hold Unix permissions by default, so the node directory checks reject them.
+Builds run on Linux, macOS and Windows (x86_64 and ARM64). On Windows the core is built with MSVC, the FIPS core is not available and `make` refuses `FIPS=1`. Windows support in 1.1.0 is experimental: CI builds and tests it on both architectures, but it has not yet been run on a managed workstation with EDR software. See [Platform differences](SECURITY.md#platform-differences) for what the core can and cannot enforce there.
 
 All builds use only vendored dependencies and work without network access.
 
@@ -46,25 +47,32 @@ Go binaries are built with the Go Cryptographic Module (`GOFIPS140=certified`) b
 
 ```bash
 $ kms-core --version
-kms-core 2.0.0 (kms-engine 2.0.0, fips=true, pqc=true)
+kms-core 1.1.0 (kms-engine 1.1.0, fips=true, pqc=true)
 
 $ kmsctl version
-kmsctl 2.0.0 (go go1.27.2, go_fips=true)
+kmsctl 1.1.0 (go go1.27.3, go_fips=true)
 ```
 
 ## Installation
 
-Release tarballs are provided for Linux amd64 and arm64 and require glibc 2.38 or later, such as Ubuntu 24.04 or Debian 13. `kmsd` and `kmsctl` are static binaries, and `kms-core` links glibc dynamically. No macOS binaries are provided, so build from source for development (see [Build](#build)).
+Release tarballs are provided for Linux amd64 and arm64 and require glibc 2.38 or later, such as Ubuntu 24.04 or Debian 13. `kmsd` and `kmsctl` are static binaries, and `kms-core` links glibc dynamically. Windows x86_64 and ARM64 are provided as zip archives (`pairier-1.1.0-windows-amd64.zip`, `pairier-1.1.0-windows-arm64.zip`) built in CI; their core is non-FIPS. No macOS binaries are provided, so build from source for development (see [Build](#build)).
 
-The distribution tarball contains `kms-core`, `kmsd`, `kmsctl`, `VERSION`, `sbom.cdx.json`, `LICENSE` and `NOTICE`. Before extracting it, verify the minisign signature on `SHA256SUMS` and then the checksums. The public key is `minisign.pub` in the repository root; see [SECURITY.md](SECURITY.md) for how to check it.
+The distribution archive contains `kms-core`, `kmsd`, `kmsctl` (with `.exe` on Windows), `VERSION`, `sbom.cdx.json`, `LICENSE` and `NOTICE`. Before extracting it, verify the minisign signature on `SHA256SUMS` and then the checksums. The public key is `minisign.pub` in the repository root; see [SECURITY.md](SECURITY.md) for how to check it.
 
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
 $ sha256sum --strict --ignore-missing -c SHA256SUMS
-$ tar -xzf pairier-2.0.0-linux-amd64.tar.gz
+$ tar -xzf pairier-1.1.0-linux-amd64.tar.gz
 ```
 
-`SHA256SUMS` lists the files for both architectures, and `--ignore-missing` skips the ones you did not download.
+`SHA256SUMS` lists the files for every platform, and `--ignore-missing` skips the ones you did not download. On Windows, Git Bash provides `sha256sum`; from PowerShell, compare the hash yourself.
+
+```powershell
+PS> minisign -Vm SHA256SUMS -p minisign.pub
+PS> (Get-FileHash .\pairier-1.1.0-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
+PS> Select-String pairier-1.1.0-windows-amd64.zip SHA256SUMS
+PS> Expand-Archive .\pairier-1.1.0-windows-amd64.zip
+```
 
 > [!TIP]
 > `kmsctl` and `kmsd` use the `kms-core` in their own directory by default. If it is located elsewhere, you can set it with the `--core` flag or the `KMS_CORE` environment variable. The node directory can be set with the `--dir` flag or the `KMS_DIR` environment variable.
@@ -142,7 +150,7 @@ If the recipient keeps `kmsd` running, the sender can push the envelope directly
 
 ```bash
 bob$ kmsd --dir ~/.pairier --listen 0.0.0.0:7443
-kmsd 2.0.0 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
+kmsd 1.1.0 member bob listening on 0.0.0.0:7443 core_fips=false go_fips=true pqc=true
 
 alice$ kmsctl --dir ~/.pairier peer health --member bob --url https://bob.example:7443
 ok  bob
@@ -280,7 +288,7 @@ If the file given with `--out` already exists, the command fails instead of over
 | `--dir`                   | `dir`                   | `$KMS_DIR`, otherwise required                 |
 | `--core`                  | `core`                  | `$KMS_CORE`, otherwise `kms-core` next to kmsd |
 | `--listen`                | `listen`                | `127.0.0.1:7443`                               |
-| `--allow-unlocked-memory` | `allow_unlocked_memory` | `true` on macOS, `false` elsewhere             |
+| `--allow-unlocked-memory` | `allow_unlocked_memory` | `true` on macOS and Windows, `false` elsewhere |
 | `--timeout`               | `timeout`               | `10s`                                          |
 | `--config FILE`           |                         |                                                |
 | `--version`               |                         |                                                |
@@ -298,6 +306,7 @@ If the file given with `--out` already exists, the command fails instead of over
 - Precedence is explicit flags -> configuration file -> environment variables -> defaults.
 - The configuration file must be a regular file that the group and other users cannot access. kmsd refuses to start if the file contains unknown fields.
 - The `listen` host must be an IP address.
+- On Windows, keep the node directory on a local NTFS volume, for example under `%LOCALAPPDATA%\pairier`. Network drives are refused, and folders that roam or synchronize to the cloud would copy `root.key` elsewhere.
 - `kmsd` opens only nodes already initialized with `kmsctl init`.
 - On `SIGINT` or `SIGTERM`, kmsd finishes in-flight requests and exits.
 - `kmsctl` can be used on the same node while `kmsd` is running. Each starts its own core, and the store and audit log are safe for concurrent access.
@@ -331,6 +340,15 @@ PrivateTmp=yes
 
 On Linux, the core locks all of its memory with the `mlockall` system call. If the memlock limit is too small the core refuses to start, so `LimitMEMLOCK=infinity` is required.
 
+### Windows
+
+The commands are the same as on Linux with the `.exe` suffix, and `kmsctl.exe` and `kmsd.exe` look for `kms-core.exe` next to themselves. `kmsd` runs as a console program; there is no service wrapper yet, so start it from a console session or a scheduled task that runs as the node user. The core locks only its key buffers (`VirtualLock`), so `--allow-unlocked-memory` defaults to `true` there.
+
+```powershell
+PS> $env:KMS_DIR = "$env:LOCALAPPDATA\pairier\bob"
+PS> .\kmsd.exe --listen 0.0.0.0:7443
+```
+
 ## Running kms-core standalone
 
 Normally `kmsctl` and `kmsd` launch the core themselves. To run the core separately under its own user, use socket path mode as follows.
@@ -342,13 +360,14 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 
 | Option                    | Description                                                                                                                                                               |
 |---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `--fd N`                  | Use an inherited socket (`3` when the host launches the core)                                                                                                             |
+| `--fd N`                  | Use an inherited socket (`3` when the host launches the core). Linux and macOS only                                                                                       |
+| `--handle N`              | Use the inherited client end of a named pipe that the host created. Windows only                                                                                          |
 | `--socket PATH`           | Accept a single connection with the expected uid on the socket path, then remove the path. Connections from other uids are logged and closed while the core keeps waiting |
 | `--root-key-file PATH`    | Accepts only a 32-byte regular file owned by the current user, with no group or other permissions, no symbolic links and no extra hard links                              |
 | `--ephemeral-root`        | Temporary root key held only in memory (blobs cannot be opened after a restart)                                                                                           |
 | `--pqc`                   | Enable PQC algorithms (when built with the pqc feature)                                                                                                                   |
-| `--allow-unlocked-memory` | Continue where `mlockall` is unavailable                                                                                                                                  |
-| `--peer-uid UID`          | uid of the peer to accept (defaults to the core's own uid). If it differs, the socket is left at mode `0666`                                                              |
+| `--allow-unlocked-memory` | Continue where `mlockall` is unavailable (macOS and Windows)                                                                                                              |
+| `--peer-uid UID`          | uid of the peer to accept (defaults to the core's own uid). If it differs, the socket is left at mode `0666`. Not available on Windows                                    |
 
 The directory that holds the socket must be owned by the core user or root. A directory writable by group or others is refused unless it has the sticky bit. When `--peer-uid` differs from the core's own uid, the socket file is mode `0666`, so restrict access with the directory permissions. For example, with the core as uid 1001 and the host as uid 1002, let only the host group traverse the directory.
 
@@ -357,7 +376,7 @@ The directory that holds the socket must be owned by the core user or root. A di
 ```
 
 > [!NOTE]
-> Currently `kmsctl` and `kmsd` support only launching the core directly with the root key in the node directory.
+> Currently `kmsctl` and `kmsd` support only launching the core directly with the root key in the node directory. On Windows the socket path mode is not available, so the core always runs this way.
 
 ## Node directory
 
@@ -371,9 +390,11 @@ The directory that holds the socket must be owned by the core user or root. A di
   witness/     audit heads witnessed for each member (up to 4096 per member)
   tls.json     TLS certificate and the id of the TLS key held in the core
   audit.log    hash-chained audit log (each entry signed with the audit key)
+  audit.log.lock  lock file shared by kmsd and kmsctl while they append
 ```
 
 - The directory must be `0700` and owned by the current user, and files must have no group or other permissions. Symbolic links are never opened.
+- On Windows the directory and every file in it must be owned by the current user and carry a DACL that grants access only to that user and SYSTEM. `kmsctl init` creates the directory that way; an entry for Administrators or any other principal is refused. Network drives are refused. Running `kmsctl` or `kmsd` elevated is not recommended, but the files they create are still owned by you because they set the default owner of their token.
 - On every use, stored metadata and public keys are checked against values the core recomputes from the blob.
 - Backups include `root.key`, so **backup media must be protected at the same level as the root key**.
 
@@ -424,5 +445,8 @@ The directory that holds the socket must be owned by the core user or root. A di
 | `exchange: malformed object: envelope from pairier 1.0.0 ...`                    | The envelope was created by 1.0.0, which this version refuses. Ask the sender to upgrade and send the key again.                                                                |
 | `node: member identity key differs from the registered card`                     | The card is not a renewal of the registered member. Check the fingerprint over a separate channel.                                                                              |
 | `node: member audit head conflicts with a head witnessed earlier`                | The sender's audit log forked or was rolled back. Investigate the sender's node. Delete `witness/<member>.json` only after confirming a backup restore over a separate channel. |
-| `` linker `link.exe` not found ``                                                | Native Windows builds are not supported. Build inside WSL2 (see [Build](#build)).                                                                                               |
-| `undefined: syscall.Socketpair`, `undefined: syscall.Stat_t`                     | Same cause as above. The host uses Unix system calls, so build it inside WSL2.                                                                                                  |
+| `` linker `link.exe` not found ``                                                | Visual Studio Build Tools with the C++ workload are missing on Windows (see [Build](#build)).                                                                                   |
+| `store: insecure directory: ... grants access to other users`                    | On Windows the node directory has a DACL entry for someone other than you and SYSTEM, usually inherited Administrators. Create it with `kmsctl init`, or run `icacls DIR /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" "SYSTEM:(OI)(CI)F"`. |
+| `store: insecure directory: ... is not owned by the current user`                | On Windows the file or directory was created by another account, or by a tool running elevated, so its owner is Administrators. Take ownership with `icacls PATH /setowner "%USERNAME%" /T` or recreate it with `kmsctl init`. The core reports the root key the same way as `object is not owned by the current user`. |
+| `store: insecure directory: ... is on a network drive`                           | Move the node directory to a local volume.                                                                                                                                      |
+| `transport: --socket: unsupported`                                               | The standalone socket mode is not available on Windows. Let `kmsctl` or `kmsd` start the core.                                                                                  |

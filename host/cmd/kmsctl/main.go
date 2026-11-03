@@ -15,6 +15,7 @@ import (
 
 	"github.com/Quant-Off/pairier/host/internal/api"
 	"github.com/Quant-Off/pairier/host/internal/audit"
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 	"github.com/Quant-Off/pairier/host/internal/node"
 	"github.com/Quant-Off/pairier/host/internal/wire"
 )
@@ -218,7 +219,7 @@ func (c *cli) options() (node.Options, error) {
 	core := c.core
 	if core == "" {
 		if exe, err := os.Executable(); err == nil {
-			core = filepath.Join(filepath.Dir(exe), "kms-core")
+			core = filepath.Join(filepath.Dir(exe), "kms-core"+fsx.ExeSuffix)
 		}
 	}
 	return node.Options{
