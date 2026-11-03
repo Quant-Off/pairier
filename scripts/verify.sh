@@ -45,7 +45,7 @@ if grep -Evq '^[0-9a-f]{64}  [A-Za-z0-9._+-]+$' SHA256SUMS; then
   exit 1
 fi
 listed=$(sed 's/^[0-9a-f]*  //' SHA256SUMS)
-for f in ./*.tar.gz ./*.cdx.json; do
+for f in ./*.tar.gz ./*.zip ./*.cdx.json; do
   [ -e "$f" ] || continue
   name=${f#./}
   if ! printf '%s\n' "$listed" | grep -Fxq -- "$name"; then
