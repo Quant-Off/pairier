@@ -25,7 +25,7 @@ pairier는 구성원 간에 대칭 키를 안전하게 생성하고 교환하기
 
 요구 사항은 다음과 같습니다.
 
-- Rust `1.95.0` (`core/rust-toolchain.toml`로 고정), Go `1.27.2`
+- Rust `1.95.0` (`core/rust-toolchain.toml`로 고정), Go `1.27.3`
 - FIPS 코어 빌드: `cmake`, `perl`, Go (정적 링크는 Linux x86_64/aarch64에서만 지원)
 - 배포본 생성: GNU tar (macOS의 경우 `brew install gnu-tar`), `python3`
 
@@ -49,7 +49,7 @@ $ kms-core --version
 kms-core 1.1.0 (kms-engine 1.1.0, fips=true, pqc=true)
 
 $ kmsctl version
-kmsctl 1.1.0 (go go1.27.2, go_fips=true)
+kmsctl 1.1.0 (go go1.27.3, go_fips=true)
 ```
 
 ## 설치

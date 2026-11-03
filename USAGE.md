@@ -25,7 +25,7 @@ Every time `kmsctl` and `kmsd` run, they start `kms-core` as a child process and
 
 Requirements:
 
-- Rust `1.95.0` (pinned by `core/rust-toolchain.toml`), Go `1.27.2`
+- Rust `1.95.0` (pinned by `core/rust-toolchain.toml`), Go `1.27.3`
 - FIPS core build: `cmake`, `perl`, Go (static linking is supported only on Linux x86_64/aarch64)
 - Distribution build: GNU tar (`brew install gnu-tar` on macOS), `python3`
 
@@ -49,7 +49,7 @@ $ kms-core --version
 kms-core 1.1.0 (kms-engine 1.1.0, fips=true, pqc=true)
 
 $ kmsctl version
-kmsctl 1.1.0 (go go1.27.2, go_fips=true)
+kmsctl 1.1.0 (go go1.27.3, go_fips=true)
 ```
 
 ## Installation
