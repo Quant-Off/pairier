@@ -125,6 +125,47 @@ jobs:
           go test -run='^$' -fuzz=FuzzDecodeHeader -fuzztime=20s ./internal/wire/
           go test -run='^$' -fuzz=FuzzDecodeBody -fuzztime=20s ./internal/wire/
 
+  host-windows:
+    env:
+      CARGO_NET_OFFLINE: "true"
+      AWS_LC_SYS_PREBUILT_NASM: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: git settings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: host/go.mod
+          cache: false
+      - name: nasm
+        if: runner.arch == 'X64'
+        run: |
+          choco install nasm --no-progress -y
+          echo 'C:\Program Files\NASM' >> "$GITHUB_PATH"
+      - name: toolchain
+        run: cd core && rustup show active-toolchain
+      - name: core for tests
+        run: cd core && cargo build --frozen -p kms-core --features pqc
+      - name: lint
+        run: |
+          cd host
+          test -z "$(gofmt -l .)"
+          go vet ./...
+      - name: test
+        run: |
+          cd host
+          KMS_CORE_BIN="$GITHUB_WORKSPACE/core/target/debug/kms-core.exe" go test ./...
+
   fips:
     env:
       CARGO_NET_OFFLINE: "true"
