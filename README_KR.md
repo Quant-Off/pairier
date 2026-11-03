@@ -43,7 +43,7 @@
 
 ## 빌드 및 실행
 
-이 내용에 관해서는 [USAGE.md](USAGE_KR.md)를 확인할 수 있습니다.
+이 내용에 관해서는 [USAGE_KR.md](USAGE_KR.md)를 확인할 수 있습니다.
 
 ## 보안
 
