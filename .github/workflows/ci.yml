@@ -78,12 +78,26 @@ jobs:
         run: |
           cd core && rustup show active-toolchain
           cmake --version
+      - name: lint
+        run: |
+          cd core
+          cargo fmt --all --check
+          cargo clippy --frozen -p kms-sys --all-targets -- -D warnings
+          cargo clippy --frozen -p kms-core --all-targets --features pqc -- -D warnings
       - name: test
         run: |
           cd core
           cargo test --frozen -p kms-sys
           cargo test --frozen -p kms-engine
           cargo test --frozen -p kms-engine --features pqc
+          cargo test --frozen -p kms-core --features pqc
+      - name: release build
+        run: |
+          cd core
+          cargo build --frozen --release -p kms-core --features pqc
+          out=$(target/release/kms-core.exe --version)
+          echo "$out"
+          case "$out" in *"fips=false"*) ;; *) echo "unexpected fips mode"; exit 1;; esac
 
   host:
     env:
