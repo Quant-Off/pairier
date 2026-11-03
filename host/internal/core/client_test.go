@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -475,6 +476,9 @@ func TestRealCoreExchange(t *testing.T) {
 
 func TestRealCoreConnect(t *testing.T) {
 	bin := realBinary(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("socket mode is not supported on windows")
+	}
 	dir := t.TempDir()
 	sock := dir + "/core.sock"
 	cmd := exec.Command(bin, "--socket", sock, "--ephemeral-root", "--allow-unlocked-memory")

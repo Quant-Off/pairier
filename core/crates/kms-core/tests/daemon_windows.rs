@@ -85,10 +85,6 @@ fn hello(s: &mut File) {
     assert_eq!(h.status, Status::Ok);
     let hello = HelloResponse::decode_body(&b).unwrap();
     assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
-    assert_eq!(
-        hello.capabilities & kms_wire::cap::PQC != 0,
-        cfg!(feature = "pqc")
-    );
     assert_eq!(hello.capabilities & kms_wire::cap::FIPS, 0);
 }
 
@@ -99,6 +95,18 @@ fn daemon_serves_a_session_over_inherited_pipe() {
         &["--ephemeral-root", "--allow-unlocked-memory", "--pqc"],
     );
     hello(&mut s);
+    let (h, b) = roundtrip(
+        &mut s,
+        1,
+        &HelloRequest {
+            protocol_version: PROTOCOL_VERSION,
+        },
+    );
+    assert_eq!(h.status, Status::Ok);
+    assert_eq!(
+        HelloResponse::decode_body(&b).unwrap().capabilities & kms_wire::cap::PQC != 0,
+        cfg!(feature = "pqc")
+    );
     let (h, b) = roundtrip(&mut s, 2, &PingRequest);
     assert_eq!(h.status, Status::Ok);
     PingResponse::decode_body(&b).unwrap();

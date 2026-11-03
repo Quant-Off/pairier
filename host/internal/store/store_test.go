@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 )
 
 func newStore(t *testing.T) *Store {
@@ -35,7 +37,7 @@ func TestInitAndOpenEnforceLayoutAndPermissions(t *testing.T) {
 		t.Fatal("open of missing dir succeeded")
 	}
 	plain := filepath.Join(base, "plain")
-	if err := os.Mkdir(plain, 0o700); err != nil {
+	if err := fsx.MkdirPrivate(plain); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(plain); !errors.Is(err, ErrNotInited) {

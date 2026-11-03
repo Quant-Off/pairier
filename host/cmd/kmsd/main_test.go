@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"context"
 	"net"
 	"os"
@@ -55,7 +56,8 @@ func TestEnvironmentDefaults(t *testing.T) {
 	}
 	cfgCore := filepath.Join(t.TempDir(), "cfg-core")
 	cfg := filepath.Join(t.TempDir(), "c.json")
-	_ = os.WriteFile(cfg, []byte(`{"core":"`+cfgCore+`","listen":"127.0.0.1:0"}`), 0o600)
+	quoted, _ := json.Marshal(cfgCore)
+	_ = os.WriteFile(cfg, []byte(`{"core":`+string(quoted)+`,"listen":"127.0.0.1:0"}`), 0o600)
 	errb.Reset()
 	if code := run([]string{"--config", cfg}, &out, &errb, nil); code != 1 || !strings.Contains(errb.String(), cfgCore) {
 		t.Fatalf("config did not override env: %d %s", code, errb.String())

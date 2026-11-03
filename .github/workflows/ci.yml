@@ -88,6 +88,7 @@ jobs:
         run: |
           cd core
           cargo test --frozen -p kms-sys
+          cargo test --frozen -p kms-sys process_dacl -- --nocapture
           cargo test --frozen -p kms-engine
           cargo test --frozen -p kms-engine --features pqc
           cargo test --frozen -p kms-core --features pqc

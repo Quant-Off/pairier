@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Quant-Off/pairier/host/internal/audit"
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 	"github.com/Quant-Off/pairier/host/internal/core"
 	"github.com/Quant-Off/pairier/host/internal/exchange"
 	"github.com/Quant-Off/pairier/host/internal/store"
@@ -295,7 +296,11 @@ func TestAuditLogCannotBeRewrittenWithoutTheCore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	forged := filepath.Join(t.TempDir(), "forged.log")
+	forgedDir := filepath.Join(t.TempDir(), "forged")
+	if err := fsx.MkdirPrivate(forgedDir); err != nil {
+		t.Fatal(err)
+	}
+	forged := filepath.Join(forgedDir, "forged.log")
 	fl, err := audit.Open(forged, audit.Options{})
 	if err != nil {
 		t.Fatal(err)

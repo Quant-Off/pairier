@@ -11,11 +11,22 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 	"time"
 )
 
+func tempLog(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "node")
+	if err := fsx.MkdirPrivate(dir); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, "audit.log")
+}
+
 func TestChainAppendVerifyAndTamper(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := tempLog(t)
 	now := func() time.Time { return time.Unix(1_700_000_000, 0) }
 	l, err := Open(path, Options{Now: now})
 	if err != nil {
@@ -96,7 +107,7 @@ func TestChainAppendVerifyAndTamper(t *testing.T) {
 }
 
 func TestConcurrentHandlesShareOneChain(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := tempLog(t)
 	a, err := Open(path, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +157,7 @@ func (k *ecdsaCheckpoints) VerifyCheckpoint(msg, sig []byte) (bool, error) {
 }
 
 func TestSignedCheckpoints(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := tempLog(t)
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	k := &ecdsaCheckpoints{key: key}
 	if _, err := Open(path, Options{Signer: k}); err == nil {
@@ -182,7 +193,7 @@ func TestSignedCheckpoints(t *testing.T) {
 		t.Fatalf("open with foreign verifier succeeded: %v", err)
 	}
 
-	rewritten := filepath.Join(t.TempDir(), "audit.log")
+	rewritten := tempLog(t)
 	rl, err := Open(rewritten, Options{Signer: f, Verifier: f})
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +211,7 @@ func TestSignedCheckpoints(t *testing.T) {
 		t.Fatalf("recomputed chain accepted without the signing key: %v", err)
 	}
 
-	unsigned := filepath.Join(t.TempDir(), "audit.log")
+	unsigned := tempLog(t)
 	ul, _ := Open(unsigned, Options{})
 	_ = ul.Append("x", nil)
 	_ = ul.Close()
@@ -233,7 +244,7 @@ func TestSignedCheckpoints(t *testing.T) {
 }
 
 func TestAnchorDetectsTruncationAndRollback(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit.log")
+	path := tempLog(t)
 	now := func() time.Time { return time.Unix(1_700_000_000, 0) }
 	l, err := Open(path, Options{Now: now})
 	if err != nil {

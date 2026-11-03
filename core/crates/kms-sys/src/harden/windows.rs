@@ -59,7 +59,7 @@ pub fn lock_all_memory() -> Result<(), Error> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::print_stderr)]
 mod tests {
     use core::ptr::{null, null_mut};
 
@@ -138,9 +138,12 @@ mod tests {
             .unwrap();
         assert_eq!(owner_rights.mask & PROCESS_VM_READ, 0);
 
-        if win::current_user_sid().unwrap() == win::local_system_sid().unwrap()
-            || debug_privilege_enabled()
-        {
+        if win::current_user_sid().unwrap() == win::local_system_sid().unwrap() {
+            eprintln!("running as SYSTEM, skipping the access check");
+            return;
+        }
+        if debug_privilege_enabled() {
+            eprintln!("SeDebugPrivilege is enabled, skipping the access check");
             return;
         }
         let pid = unsafe { GetCurrentProcessId() };
