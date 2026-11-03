@@ -28,8 +28,9 @@ pairier는 구성원 간에 대칭 키를 안전하게 생성하고 교환하기
 - Rust `1.95.0` (`core/rust-toolchain.toml`로 고정), Go `1.27.3`
 - FIPS 코어 빌드: `cmake`, `perl`, Go (정적 링크는 Linux x86_64/aarch64에서만 지원)
 - 배포본 생성: GNU tar (macOS의 경우 `brew install gnu-tar`), `python3`
+- Windows: C++ 워크로드가 포함된 Visual Studio Build Tools(MSVC), `cmake`, NASM(x86_64만), Git for Windows. `make`는 Git Bash에서 MSYS2나 Chocolatey의 GNU make로 실행하거나, `Makefile`의 명령을 직접 실행하세요.
 
-빌드는 Linux와 macOS에서 동작합니다. 코어의 격리가 상속 소켓, 피어 UID 검사, `ptrace` 거부, `0700` 권한 같은 Unix 프로세스와 파일 권한 기능에 의존하므로 Windows 네이티브 빌드는 지원하지 않습니다. Windows에서는 WSL2의 Ubuntu 24.04 안에 위 요구 사항을 설치해 빌드하세요. 저장소와 노드 디렉토리는 `~/` 아래처럼 WSL 파일 시스템에 두어야 합니다. `/mnt/c` 아래의 Windows 드라이브는 기본적으로 Unix 권한을 지정할 수 없어 노드 디렉토리 검사에서 거부됩니다.
+빌드는 Linux, macOS, Windows(x86_64, ARM64)에서 동작합니다. Windows에서는 코어를 MSVC로 빌드하고, FIPS 코어는 제공되지 않으며 `make`가 `FIPS=1`을 거부합니다. 1.1.0의 Windows 지원은 experimental입니다. CI가 두 아키텍처에서 빌드와 테스트를 수행하지만, EDR 소프트웨어가 있는 관리형 워크스테이션에서는 아직 실행해 보지 않았습니다. 코어가 Windows에서 보장할 수 있는 것과 없는 것은 [플랫폼별 차이](SECURITY_KR.md#플랫폼별-차이)를 참고하세요.
 
 모든 빌드는 벤더링된 의존성만 사용하며 네트워크 없이 동작합니다.
 
@@ -54,9 +55,9 @@ kmsctl 1.1.0 (go go1.27.3, go_fips=true)
 
 ## 설치
 
-배포 tarball은 Linux amd64와 arm64용으로 제공되며 glibc 2.38 이상이 필요합니다(Ubuntu 24.04, Debian 13 등). `kmsd`와 `kmsctl`은 정적 바이너리이고, `kms-core`는 glibc를 동적 링크합니다. macOS 바이너리는 제공하지 않기 때문에 개발용으로는 소스에서 직접 빌드하세요([빌드](#빌드) 참고).
+배포 tarball은 Linux amd64와 arm64용으로 제공되며 glibc 2.38 이상이 필요합니다(Ubuntu 24.04, Debian 13 등). `kmsd`와 `kmsctl`은 정적 바이너리이고, `kms-core`는 glibc를 동적 링크합니다. Windows x86_64와 ARM64는 CI에서 빌드한 zip(`pairier-1.1.0-windows-amd64.zip`, `pairier-1.1.0-windows-arm64.zip`)으로 제공되며, 코어는 non-FIPS입니다. macOS 바이너리는 제공하지 않기 때문에 개발용으로는 소스에서 직접 빌드하세요([빌드](#빌드) 참고).
 
-배포 tarball에는 `kms-core`, `kmsd`, `kmsctl`, `VERSION`, `sbom.cdx.json`, `LICENSE`, `NOTICE`가 들어 있습니다. 해제 전에 `SHA256SUMS`의 minisign 서명(signature)을 먼저 확인하고, 그다음 체크섬(checksum)을 확인하세요. 공개키는 저장소 루트의 `minisign.pub`이며, 확인 방법은 [SECURITY_KR.md](SECURITY_KR.md)를 참고하세요.
+배포 아카이브에는 `kms-core`, `kmsd`, `kmsctl`(Windows에서는 `.exe`), `VERSION`, `sbom.cdx.json`, `LICENSE`, `NOTICE`가 들어 있습니다. 해제 전에 `SHA256SUMS`의 minisign 서명(signature)을 먼저 확인하고, 그다음 체크섬(checksum)을 확인하세요. 공개키는 저장소 루트의 `minisign.pub`이며, 확인 방법은 [SECURITY_KR.md](SECURITY_KR.md)를 참고하세요.
 
 ```bash
 $ minisign -Vm SHA256SUMS -p minisign.pub
@@ -64,7 +65,14 @@ $ sha256sum --strict --ignore-missing -c SHA256SUMS
 $ tar -xzf pairier-1.1.0-linux-amd64.tar.gz
 ```
 
-`SHA256SUMS`에는 두 아키텍처의 파일이 모두 들어 있으며, `--ignore-missing`은 받지 않은 파일을 건너뜁니다.
+`SHA256SUMS`에는 모든 플랫폼의 파일이 들어 있으며, `--ignore-missing`은 받지 않은 파일을 건너뜁니다. Windows에서는 Git Bash에 `sha256sum`이 있고, PowerShell에서는 해시를 직접 비교합니다.
+
+```powershell
+PS> minisign -Vm SHA256SUMS -p minisign.pub
+PS> (Get-FileHash .\pairier-1.1.0-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
+PS> Select-String pairier-1.1.0-windows-amd64.zip SHA256SUMS
+PS> Expand-Archive .\pairier-1.1.0-windows-amd64.zip
+```
 
 > [!TIP]
 > `kmsctl`과 `kmsd`는 같은 디렉토리에 있는 `kms-core`를 기본으로 사용합니다. 다른 위치에 둔 경우 `--core` 플래그 또는 `KMS_CORE` 환경 변수로 지정할 수 있습니다. 노드 디렉토리는 `--dir` 플래그 또는 `KMS_DIR` 환경 변수로 지정할 수 있습니다.
@@ -280,7 +288,7 @@ send the new card and fingerprint to every member and restart kmsd
 | `--dir`                   | `dir`                   | `$KMS_DIR`, 없는 경우 필수                  |
 | `--core`                  | `core`                  | `$KMS_CORE`, 없는 경우 kmsd 옆의 `kms-core` |
 | `--listen`                | `listen`                | `127.0.0.1:7443`                      |
-| `--allow-unlocked-memory` | `allow_unlocked_memory` | macOS `true`, 그 외 `false`             |
+| `--allow-unlocked-memory` | `allow_unlocked_memory` | macOS와 Windows `true`, 그 외 `false`    |
 | `--timeout`               | `timeout`               | `10s`                                 |
 | `--config FILE`           |                         |                                       |
 | `--version`               |                         |                                       |
@@ -298,6 +306,7 @@ send the new card and fingerprint to every member and restart kmsd
 - 우선순위는 명시한 플래그 -> 설정 파일 -> 환경 변수 -> 기본값 순입니다.
 - 설정 파일은 일반 파일이어야 하며, 그룹 또는 다른 사용자가 사용할 수 없어야 합니다. 알 수 없는 필드가 있다면 기동하지 않습니다.
 - `listen`의 호스트는 IP 주소만 허용합니다.
+- Windows에서는 노드 디렉토리를 로컬 NTFS 볼륨, 예를 들어 `%LOCALAPPDATA%\pairier` 아래에 두세요. 네트워크 드라이브는 거부되며, 로밍되거나 클라우드로 동기화되는 폴더는 `root.key`를 다른 곳으로 복사하게 됩니다.
 - `kmsd`는 `kmsctl init`으로 이미 초기화한 노드만 엽니다.
 - `SIGINT`나 `SIGTERM`을 받으면 진행 중인 요청을 마무리하고 종료합니다.
 - `kmsd`가 실행 중이어도 같은 노드에서 `kmsctl`을 쓸 수 있습니다. 각자 별도의 코어를 띄우며, 저장소와 감사 로그는 동시 접근에 안전합니다.
@@ -331,6 +340,15 @@ PrivateTmp=yes
 
 Linux에서 코어는 `mlockall` 시스템 콜로 모든 메모리를 잠급니다. memlock 한도가 작으면 코어가 기동을 거부하기 때문에 `LimitMEMLOCK=infinity`가 필요합니다.
 
+### Windows
+
+명령은 Linux와 같고 `.exe` 접미사만 붙으며, `kmsctl.exe`와 `kmsd.exe`는 같은 디렉토리의 `kms-core.exe`를 찾습니다. `kmsd`는 콘솔 프로그램으로 실행됩니다. 아직 서비스 래퍼가 없으므로 콘솔 세션이나 노드 사용자로 실행되는 예약 작업에서 시작하세요. 코어는 키 버퍼만 잠그므로(`VirtualLock`) `--allow-unlocked-memory` 기본값이 `true`입니다.
+
+```powershell
+PS> $env:KMS_DIR = "$env:LOCALAPPDATA\pairier\bob"
+PS> .\kmsd.exe --listen 0.0.0.0:7443
+```
+
 ## kms-core 단독 실행
 
 보통은 `kmsctl`과 `kmsd`가 코어를 직접 띄웁니다. 코어를 별도 사용자로 분리해 운영하려면 다음과 같이 소켓 경로 모드를 사용해야 합니다.
@@ -342,13 +360,14 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 
 | 옵션                        | 설명                                                            |
 |---------------------------|---------------------------------------------------------------|
-| `--fd N`                  | 상속받은 소켓 사용 (호스트가 기동할 때 `3`)                                   |
+| `--fd N`                  | 상속받은 소켓 사용 (호스트가 기동할 때 `3`). Linux와 macOS 전용                   |
+| `--handle N`              | 호스트가 만든 이름 있는 파이프의 상속받은 클라이언트 핸들 사용. Windows 전용               |
 | `--socket PATH`           | 소켓 경로에서 uid가 맞는 연결 하나만 받은 뒤 경로를 삭제. 다른 uid의 연결은 기록 후 끊고 계속 대기 |
 | `--root-key-file PATH`    | 32바이트 일반 파일만 허용. 현재 사용자 소유, 그룹과 기타 권한 없음, 심볼릭 링크와 추가 하드 링크 없음 |
 | `--ephemeral-root`        | 메모리에만 있는 임시 루트 키 (재시작하면 blob을 열 수 없음)                         |
 | `--pqc`                   | PQC 알고리즘 활성화 (pqc feature로 빌드한 경우)                            |
-| `--allow-unlocked-memory` | `mlockall`을 쓸 수 없는 환경에서 계속 진행                                 |
-| `--peer-uid UID`          | 받을 피어의 uid (기본은 자신의 uid). 자신과 다르면 소켓을 `0666`으로 열어 둠           |
+| `--allow-unlocked-memory` | `mlockall`을 쓸 수 없는 환경에서 계속 진행 (macOS, Windows)                 |
+| `--peer-uid UID`          | 받을 피어의 uid (기본은 자신의 uid). 자신과 다르면 소켓을 `0666`으로 열어 둠. Windows에서는 사용 불가 |
 
 소켓을 만드는 디렉토리는 코어 사용자나 root 소유여야 합니다. 그룹이나 기타 사용자가 쓸 수 있는 디렉토리는 sticky 비트가 없으면 기동을 거부합니다. `--peer-uid`가 코어 자신과 다르면 소켓 파일이 `0666`이 되므로, 디렉토리 권한으로 접근을 좁혀야 합니다. 예를 들어 코어가 uid 1001, 호스트가 uid 1002라면 호스트 그룹만 디렉토리를 지날 수 있게 만듭니다.
 
@@ -357,7 +376,7 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 ```
 
 > [!NOTE]
-> 현재 `kmsctl`과 `kmsd`는 노드 디렉토리의 루트 키로 코어를 직접 기동하는 방식만 지원합니다.
+> 현재 `kmsctl`과 `kmsd`는 노드 디렉토리의 루트 키로 코어를 직접 기동하는 방식만 지원합니다. Windows에서는 소켓 경로 모드를 쓸 수 없으므로 코어는 항상 이 방식으로 실행됩니다.
 
 ## 노드 디렉토리
 
@@ -371,9 +390,11 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
   witness/     구성원별로 증인으로 본 감사 로그 head (구성원당 최대 4096개)
   tls.json     TLS 인증서와 코어 안 TLS 키의 id
   audit.log    해시 체인 감사 로그 (항목마다 감사 키 서명)
+  audit.log.lock  kmsd와 kmsctl이 기록할 때 함께 쓰는 잠금 파일
 ```
 
 - 디렉토리는 `0700`이고 현재 사용자 소유여야 하며, 파일에는 그룹과 기타 권한이 없어야 합니다. 심볼릭 링크는 열지 않습니다.
+- Windows에서는 디렉토리와 그 안의 모든 파일이 현재 사용자 소유이고, 그 사용자와 SYSTEM에게만 접근을 허용하는 DACL을 가져야 합니다. `kmsctl init`이 디렉토리를 그렇게 만듭니다. Administrators나 다른 주체의 항목이 있으면 거부되고, 네트워크 드라이브도 거부됩니다.
 - 저장된 메타데이터와 공개키는 사용할 때마다 코어가 blob에서 다시 계산한 값과 대조합니다.
 - 백업에는 `root.key`가 포함되기 때문에 **백업 매체도 루트 키와 같은 수준으로 보호**해야 합니다.
 
@@ -424,5 +445,7 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | `exchange: malformed object: envelope from pairier 1.0.0 ...`                    | 1.0.0이 만든 봉투이며 이 버전은 받지 않습니다. 송신자가 업그레이드한 뒤 키를 다시 보내야 합니다.                         |
 | `node: member identity key differs from the registered card`                     | 등록된 구성원의 갱신 카드가 아닙니다. 별도 채널로 지문을 확인해야 합니다.                                                          |
 | `node: member audit head conflicts with a head witnessed earlier`                | 송신자의 감사 로그가 분기했거나 되돌려졌습니다. 송신자 노드를 조사해야 합니다. 백업 복원임을 별도 채널로 확인한 경우에만 `witness/<member>.json`을 지웁니다. |
-| `` linker `link.exe` not found ``                                                | Windows 네이티브 빌드는 지원하지 않습니다. WSL2 안에서 빌드해야 합니다([빌드](#빌드) 참고).                                        |
-| `undefined: syscall.Socketpair`, `undefined: syscall.Stat_t`                     | 원인이 위와 같습니다. 호스트가 Unix 시스템 콜을 사용하므로 WSL2 안에서 빌드해야 합니다.                                              |
+| `` linker `link.exe` not found ``                                                | Windows에 C++ 워크로드가 포함된 Visual Studio Build Tools가 없습니다([빌드](#빌드) 참고).                               |
+| `store: insecure directory: ... grants access to other users`                    | Windows에서 노드 디렉토리의 DACL에 나와 SYSTEM 외의 주체, 보통 상속된 Administrators 항목이 있습니다. `kmsctl init`으로 만들거나 `icacls DIR /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" "SYSTEM:(OI)(CI)F"`를 실행해야 합니다. |
+| `store: insecure directory: ... is on a network drive`                           | 노드 디렉토리를 로컬 볼륨으로 옮겨야 합니다.                                                                           |
+| `transport: --socket: unsupported`                                               | Windows에서는 단독 소켓 모드를 쓸 수 없습니다. `kmsctl`이나 `kmsd`가 코어를 기동하게 해야 합니다.                                  |

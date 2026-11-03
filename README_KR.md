@@ -37,7 +37,7 @@
 - 알고리즘: AES-256-GCM, ECDSA P-256/P-384, Ed25519, ML-DSA-65/87, ML-KEM-768/1024, MLKEM768-P256 하이브리드 KEM(draft-ietf-hpke-pq)
 - 선택적 PQC: 컴파일 타임 `pqc` feature와 런타임 `--pqc` 플래그를 모두 설정해야 활성화되며, `HELLO` 응답의 capability 비트를 통해 호스트에 알립니다.
 - 키 용도 강제: 생성 시 지정한 용도(ENCRYPT, DECRYPT, SIGN, VERIFY 등) 외의 연산은 코어 측에서 거부합니다.
-- 코어 하드닝: 시작 시 코어 덤프 차단, `ptrace` 거부, `no_new_privs`, `umask 077`, 환경 변수 제거, 불필요 `fd` 정리, 피어(peer) UID 검증, 루트 키 파일 권한·소유자·링크 검증을 수행합니다. Linux에서는 `mlockall`로 메모리 스와핑(swap)을 막습니다.
+- 코어 하드닝: 시작 시 코어 덤프 차단, `ptrace` 거부, `no_new_privs`, `umask 077`, 환경 변수 제거, 불필요 `fd` 정리, 피어(peer) UID 검증, 루트 키 파일 권한·소유자·링크 검증을 수행합니다. Linux에서는 `mlockall`로 메모리 스와핑(swap)을 막습니다. Windows(1.1.0부터 experimental)에서는 코어가 자기 프로세스 객체를 DACL로 제한하고, 피어의 사용자 SID를 검증하며, 파일을 소유자 전용 DACL로 보호합니다.
 - 엄격한 프로토콜: 고정 16바이트 헤더와 길이 접두 필드, 1MiB 본문 상한, 후행 바이트를 거부합니다. `HELLO` 선행을 강제하며 프레이밍(framing) 위반 시 세션을 끊어냅니다.
 - 폐쇄 빌드: Rust 의존성은 `core/vendor`에 벤더링되고 `--frozen`으로 빌드합니다. Go는 `GOPROXY=off`, `-mod=vendor`로 빌드하며 외부 의존성이 없습니다.
 

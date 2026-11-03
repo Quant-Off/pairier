@@ -37,7 +37,7 @@ The following features are also included.
 - Algorithms: AES-256-GCM, ECDSA P-256/P-384, Ed25519, ML-DSA-65/87, ML-KEM-768/1024, and the MLKEM768-P256 hybrid KEM (draft-ietf-hpke-pq)
 - Optional PQC: enabled only when both the compile-time `pqc` feature and the runtime `--pqc` flag are set, and advertised to the host through capability bits in the `HELLO` response.
 - Key usage enforcement: the core rejects any operation outside the usage assigned at generation time (ENCRYPT, DECRYPT, SIGN, VERIFY, and so on).
-- Core hardening: on startup the core disables core dumps, denies `ptrace`, sets `no_new_privs` and `umask 077`, scrubs environment variables, closes unneeded `fd`s, verifies the peer UID, and checks the root key file's permissions, owner, and links. On Linux, `mlockall` prevents memory from being swapped.
+- Core hardening: on startup the core disables core dumps, denies `ptrace`, sets `no_new_privs` and `umask 077`, scrubs environment variables, closes unneeded `fd`s, verifies the peer UID, and checks the root key file's permissions, owner, and links. On Linux, `mlockall` prevents memory from being swapped. On Windows (experimental since 1.1.0) the core restricts its own process object with a DACL, verifies the peer's user SID and protects files with owner-only DACLs.
 - Strict protocol: fixed 16-byte header, length-prefixed fields, 1 MiB body limit, and rejection of trailing bytes. `HELLO` must come first, and any framing violation terminates the session.
 - Air-gapped build: Rust dependencies are vendored in `core/vendor` and built with `--frozen`. Go builds with `GOPROXY=off` and `-mod=vendor` and has no external dependencies.
 
