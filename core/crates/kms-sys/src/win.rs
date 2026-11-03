@@ -8,10 +8,10 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, CopySid,
-    CreateWellKnownSid, DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation,
-    GetLengthSid, GetSecurityDescriptorDacl, GetTokenInformation, IsValidSid,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-    SECURITY_MAX_SID_SIZE, TOKEN_QUERY, TOKEN_USER, TokenUser, WinLocalSystemSid,
+    CreateWellKnownSid, DACL_SECURITY_INFORMATION, GetAce, GetAclInformation, GetLengthSid,
+    GetSecurityDescriptorDacl, GetTokenInformation, IsValidSid, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE, TOKEN_QUERY,
+    TOKEN_USER, TokenUser, WinLocalSystemSid,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -20,6 +20,7 @@ use windows_sys::Win32::System::Threading::{
 use crate::error::Error;
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Sid {
@@ -63,10 +64,6 @@ impl Sid {
         }
         sid.len = n;
         Ok(sid)
-    }
-
-    pub(crate) fn equals(&self, other: PSID) -> bool {
-        !other.is_null() && unsafe { EqualSid(self.as_psid(), other) } != 0
     }
 
     pub(crate) fn display(&self) -> Result<String, Error> {
@@ -265,11 +262,24 @@ impl core::fmt::Debug for Attributes {
     }
 }
 
-pub(crate) fn check_private_object(
+#[derive(Debug, Clone)]
+pub(crate) struct Ace {
+    pub(crate) kind: u8,
+    #[allow(dead_code)]
+    pub(crate) mask: u32,
+    pub(crate) sid: Sid,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ObjectSecurity {
+    pub(crate) owner: Option<Sid>,
+    pub(crate) dacl: Option<Vec<Ace>>,
+}
+
+pub(crate) fn object_security(
     handle: HANDLE,
     kind: SE_OBJECT_TYPE,
-    owner: &Sid,
-) -> Result<(), Error> {
+) -> Result<ObjectSecurity, Error> {
     let mut owner_sid: PSID = null_mut();
     let mut dacl: *mut ACL = null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
@@ -288,24 +298,22 @@ pub(crate) fn check_private_object(
     if rc != 0 {
         return Err(Error::code("GetSecurityInfo", rc));
     }
-    let result = unsafe { verify_private(owner_sid, dacl, owner) };
+    let result = unsafe { collect(owner_sid, dacl) };
     unsafe {
         LocalFree(descriptor);
     }
     result
 }
 
-unsafe fn verify_private(owner_sid: PSID, dacl: *const ACL, owner: &Sid) -> Result<(), Error> {
-    if !owner.equals(owner_sid) {
-        return Err(Error::invalid(
-            "GetSecurityInfo",
-            "object is not owned by the current user",
-        ));
-    }
+unsafe fn collect(owner_sid: PSID, dacl: *const ACL) -> Result<ObjectSecurity, Error> {
+    let owner = if owner_sid.is_null() {
+        None
+    } else {
+        Some(unsafe { Sid::from_psid("GetSecurityInfo", owner_sid) }?)
+    };
     if dacl.is_null() {
-        return Err(Error::invalid("GetSecurityInfo", "object has no DACL"));
+        return Ok(ObjectSecurity { owner, dacl: None });
     }
-    let system = local_system_sid()?;
     let mut info: ACL_SIZE_INFORMATION = unsafe { core::mem::zeroed() };
     let info_len = u32::try_from(size_of::<ACL_SIZE_INFORMATION>())
         .map_err(|_| Error::invalid("GetAclInformation", "size overflow"))?;
@@ -320,21 +328,54 @@ unsafe fn verify_private(owner_sid: PSID, dacl: *const ACL, owner: &Sid) -> Resu
     if rc == 0 {
         return Err(Error::last("GetAclInformation"));
     }
+    let mut entries = Vec::new();
     for index in 0..info.AceCount {
         let mut ace: *mut c_void = null_mut();
         if unsafe { GetAce(dacl, index, &raw mut ace) } == 0 || ace.is_null() {
             return Err(Error::last("GetAce"));
         }
         let header = unsafe { &*ace.cast::<ACE_HEADER>() };
-        if header.AceType != ACCESS_ALLOWED_ACE_TYPE {
+        if header.AceType > ACCESS_DENIED_ACE_TYPE {
+            return Err(Error::invalid("GetAce", "unsupported ACE type"));
+        }
+        let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
+        let sid = (&raw const allowed.SidStart).cast_mut().cast::<c_void>();
+        entries.push(Ace {
+            kind: header.AceType,
+            mask: allowed.Mask,
+            sid: unsafe { Sid::from_psid("GetAce", sid) }?,
+        });
+    }
+    Ok(ObjectSecurity {
+        owner,
+        dacl: Some(entries),
+    })
+}
+
+pub(crate) fn check_private_object(
+    handle: HANDLE,
+    kind: SE_OBJECT_TYPE,
+    owner: &Sid,
+) -> Result<(), Error> {
+    let security = object_security(handle, kind)?;
+    if security.owner.as_ref() != Some(owner) {
+        return Err(Error::invalid(
+            "GetSecurityInfo",
+            "object is not owned by the current user",
+        ));
+    }
+    let Some(entries) = security.dacl else {
+        return Err(Error::invalid("GetSecurityInfo", "object has no DACL"));
+    };
+    let system = local_system_sid()?;
+    for ace in &entries {
+        if ace.kind != ACCESS_ALLOWED_ACE_TYPE {
             return Err(Error::invalid(
                 "GetSecurityInfo",
                 "object DACL contains an entry that is not an allow entry",
             ));
         }
-        let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
-        let sid = (&raw const allowed.SidStart).cast_mut().cast::<c_void>();
-        if !owner.equals(sid) && !system.equals(sid) {
+        if ace.sid != *owner && ace.sid != system {
             return Err(Error::invalid(
                 "GetSecurityInfo",
                 "object grants access to other users",
