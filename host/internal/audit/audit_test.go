@@ -93,9 +93,11 @@ func TestChainAppendVerifyAndTamper(t *testing.T) {
 	if err := os.WriteFile(path, []byte(lines[0]+"\n"+lines[1]+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(path, Options{Now: now}); err != nil {
+	reopened, err := Open(path, Options{Now: now})
+	if err != nil {
 		t.Fatalf("prefix of a valid chain rejected: %v", err)
 	}
+	_ = reopened.Close()
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(path, 0o640); err != nil {
 			t.Fatal(err)

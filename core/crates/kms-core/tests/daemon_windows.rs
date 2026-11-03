@@ -74,7 +74,7 @@ fn finish(mut child: Child) -> (bool, String) {
     (status.success(), err)
 }
 
-fn hello(s: &mut File) {
+fn hello(s: &mut File, pqc: bool) {
     let (h, b) = roundtrip(
         s,
         1,
@@ -86,6 +86,7 @@ fn hello(s: &mut File) {
     let hello = HelloResponse::decode_body(&b).unwrap();
     assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
     assert_eq!(hello.capabilities & kms_wire::cap::FIPS, 0);
+    assert_eq!(hello.capabilities & kms_wire::cap::PQC != 0, pqc);
 }
 
 #[test]
@@ -94,19 +95,7 @@ fn daemon_serves_a_session_over_inherited_pipe() {
         "session",
         &["--ephemeral-root", "--allow-unlocked-memory", "--pqc"],
     );
-    hello(&mut s);
-    let (h, b) = roundtrip(
-        &mut s,
-        1,
-        &HelloRequest {
-            protocol_version: PROTOCOL_VERSION,
-        },
-    );
-    assert_eq!(h.status, Status::Ok);
-    assert_eq!(
-        HelloResponse::decode_body(&b).unwrap().capabilities & kms_wire::cap::PQC != 0,
-        cfg!(feature = "pqc")
-    );
+    hello(&mut s, cfg!(feature = "pqc"));
     let (h, b) = roundtrip(&mut s, 2, &PingRequest);
     assert_eq!(h.status, Status::Ok);
     PingResponse::decode_body(&b).unwrap();
@@ -132,7 +121,7 @@ fn root_key_file_is_generated_private_and_loaded() {
             "--allow-unlocked-memory",
         ],
     );
-    hello(&mut s);
+    hello(&mut s, false);
     drop(s);
     let (ok, err) = finish(child);
     assert!(ok, "daemon failed: {err}");
