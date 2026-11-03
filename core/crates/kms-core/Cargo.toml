@@ -20,8 +20,10 @@ pqc = ["kms-engine/pqc"]
 kms-engine.workspace = true
 kms-wire.workspace = true
 kms-sys.workspace = true
-libc = "0.2"
 zeroize = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [lints]
 workspace = true
