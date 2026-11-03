@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/Quant-Off/pairier/host/internal/audit"
-	"github.com/Quant-Off/pairier/host/internal/fsx"
 	"github.com/Quant-Off/pairier/host/internal/core"
 	"github.com/Quant-Off/pairier/host/internal/exchange"
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 	"github.com/Quant-Off/pairier/host/internal/store"
 	"github.com/Quant-Off/pairier/host/internal/wire"
 )

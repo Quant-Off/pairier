@@ -2,8 +2,8 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
