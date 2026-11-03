@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,21 +41,23 @@ func TestInitAndOpenEnforceLayoutAndPermissions(t *testing.T) {
 	if _, err := Open(plain); !errors.Is(err, ErrNotInited) {
 		t.Fatalf("expected ErrNotInited, got %v", err)
 	}
-	if err := os.Chmod(dir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(dir); !errors.Is(err, ErrInsecure) {
-		t.Fatalf("expected ErrInsecure, got %v", err)
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(base, "link")
-	if err := os.Symlink(dir, link); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(link); !errors.Is(err, ErrInsecure) {
-		t.Fatalf("expected ErrInsecure for symlink, got %v", err)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(dir); !errors.Is(err, ErrInsecure) {
+			t.Fatalf("expected ErrInsecure, got %v", err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(base, "link")
+		if err := os.Symlink(dir, link); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(link); !errors.Is(err, ErrInsecure) {
+			t.Fatalf("expected ErrInsecure for symlink, got %v", err)
+		}
 	}
 	if _, err := s.GetNode(); !errors.Is(err, ErrNotInited) {
 		t.Fatalf("expected ErrNotInited, got %v", err)
@@ -89,15 +92,17 @@ func TestKeyRecords(t *testing.T) {
 	if err != nil || len(list) != 2 || list[0].KeyID != r2.KeyID || list[1].Origin != nil || list[0].Origin.Sender != "bob" {
 		t.Fatalf("list: %+v %v", list, err)
 	}
-	fi, err := os.Stat(filepath.Join(s.Dir(), "keys", id+".json"))
-	if err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("file mode %v %v", fi.Mode(), err)
-	}
-	if err := os.Chmod(filepath.Join(s.Dir(), "keys", id+".json"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.GetKey(id); !errors.Is(err, ErrInsecure) {
-		t.Fatalf("expected ErrInsecure, got %v", err)
+	if runtime.GOOS != "windows" {
+		fi, err := os.Stat(filepath.Join(s.Dir(), "keys", id+".json"))
+		if err != nil || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("file mode %v %v", fi.Mode(), err)
+		}
+		if err := os.Chmod(filepath.Join(s.Dir(), "keys", id+".json"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.GetKey(id); !errors.Is(err, ErrInsecure) {
+			t.Fatalf("expected ErrInsecure, got %v", err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(s.Dir(), "keys", "junk.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
@@ -253,26 +258,28 @@ func TestReplaceIsAtomicAndNeedsAnExistingRecord(t *testing.T) {
 	if err := s.ReplaceMember(&MemberRecord{MemberID: "../bob"}); !errors.Is(err, ErrBadID) {
 		t.Fatalf("bad id accepted: %v", err)
 	}
-	path := filepath.Join(s.Dir(), "members", "bob.json")
-	fi, err := os.Lstat(path)
-	if err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("replaced file mode: %v %v", fi.Mode(), err)
-	}
-	target := filepath.Join(t.TempDir(), "target")
-	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, path); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.ReplaceMember(m); !errors.Is(err, ErrInsecure) {
-		t.Fatalf("symlink replaced: %v", err)
-	}
-	if b, _ := os.ReadFile(target); string(b) != "{}" {
-		t.Fatalf("symlink target changed: %q", b)
+	if runtime.GOOS != "windows" {
+		path := filepath.Join(s.Dir(), "members", "bob.json")
+		fi, err := os.Lstat(path)
+		if err != nil || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("replaced file mode: %v %v", fi.Mode(), err)
+		}
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ReplaceMember(m); !errors.Is(err, ErrInsecure) {
+			t.Fatalf("symlink replaced: %v", err)
+		}
+		if b, _ := os.ReadFile(target); string(b) != "{}" {
+			t.Fatalf("symlink target changed: %q", b)
+		}
 	}
 	n := &Node{MemberID: "alice", IdentityKeyID: KeyIDString([16]byte{1}), KemKeyID: KeyIDString([16]byte{2}), AuditKeyID: KeyIDString([16]byte{3})}
 	if err := s.ReplaceNode(n); !errors.Is(err, ErrNotFound) {
@@ -314,8 +321,7 @@ func TestWitnessRecords(t *testing.T) {
 	if err := s.UpdateWitness("alice", add(h1)); err != nil {
 		t.Fatal(err)
 	}
-	fi, err := os.Stat(filepath.Join(s.Dir(), "witness"))
-	if err != nil || fi.Mode().Perm() != 0o700 {
+	if fi, err := os.Stat(filepath.Join(s.Dir(), "witness")); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700) {
 		t.Fatalf("witness dir: %v %v", fi, err)
 	}
 	if err := s.UpdateWitness("alice", add(WitnessHead{Seq: 9, Hash: strings.Repeat("cd", 32)})); err != nil {

@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"os/exec"
-	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -22,10 +19,8 @@ type Options struct {
 	Stderr              io.Writer
 }
 
-const childFD = 3
-
 func (o *Options) args() ([]string, error) {
-	args := []string{"--fd", strconv.Itoa(childFD)}
+	var args []string
 	switch {
 	case o.RootKeyFile != "" && o.EphemeralRoot:
 		return nil, fmt.Errorf("core: RootKeyFile and EphemeralRoot are mutually exclusive")
@@ -45,32 +40,11 @@ func (o *Options) args() ([]string, error) {
 	return args, nil
 }
 
-func socketPair() (parent *net.UnixConn, child *os.File, err error) {
-	syscall.ForkLock.RLock()
-	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
-	if err == nil {
-		syscall.CloseOnExec(fds[0])
-		syscall.CloseOnExec(fds[1])
-	}
-	syscall.ForkLock.RUnlock()
-	if err != nil {
-		return nil, nil, fmt.Errorf("core: socketpair: %w", err)
-	}
-	pf := os.NewFile(uintptr(fds[0]), "kms-core-parent")
-	child = os.NewFile(uintptr(fds[1]), "kms-core-child")
-	fc, err := net.FileConn(pf)
-	_ = pf.Close()
-	if err != nil {
-		_ = child.Close()
-		return nil, nil, fmt.Errorf("core: fileconn: %w", err)
-	}
-	uc, ok := fc.(*net.UnixConn)
-	if !ok {
-		_ = fc.Close()
-		_ = child.Close()
-		return nil, nil, fmt.Errorf("core: socketpair did not yield a unix conn")
-	}
-	return uc, child, nil
+type transport interface {
+	args() []string
+	attach(cmd *exec.Cmd)
+	started() (net.Conn, error)
+	abort()
 }
 
 func Spawn(ctx context.Context, o Options) (*Client, error) {
@@ -81,22 +55,26 @@ func Spawn(ctx context.Context, o Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	parent, child, err := socketPair()
+	tr, err := newTransport()
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(o.Binary, args...)
+	cmd := exec.Command(o.Binary, append(tr.args(), args...)...)
 	cmd.Env = []string{}
-	cmd.Dir = "/"
+	cmd.Dir = childDir()
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = o.Stderr
-	cmd.ExtraFiles = []*os.File{child}
+	tr.attach(cmd)
 	if err := cmd.Start(); err != nil {
-		_ = child.Close()
-		_ = parent.Close()
+		tr.abort()
 		return nil, fmt.Errorf("core: start %q: %w", o.Binary, err)
 	}
-	_ = child.Close()
-	return newClient(ctx, parent, cmd, o.Timeout)
+	conn, err := tr.started()
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, err
+	}
+	return newClient(ctx, conn, cmd, o.Timeout)
 }

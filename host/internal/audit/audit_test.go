@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -35,8 +36,7 @@ func TestChainAppendVerifyAndTamper(t *testing.T) {
 	if err := l.Close(); err != nil {
 		t.Fatal(err)
 	}
-	fi, _ := os.Stat(path)
-	if fi.Mode().Perm() != 0o600 {
+	if fi, _ := os.Stat(path); runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", fi.Mode())
 	}
 	n, err := Verify(path, nil)
@@ -85,11 +85,13 @@ func TestChainAppendVerifyAndTamper(t *testing.T) {
 	if _, err := Open(path, Options{Now: now}); err != nil {
 		t.Fatalf("prefix of a valid chain rejected: %v", err)
 	}
-	if err := os.Chmod(path, 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(path, Options{Now: now}); !errors.Is(err, ErrInsecure) {
-		t.Fatalf("permissive mode accepted: %v", err)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0o640); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(path, Options{Now: now}); !errors.Is(err, ErrInsecure) {
+			t.Fatalf("permissive mode accepted: %v", err)
+		}
 	}
 }
 
