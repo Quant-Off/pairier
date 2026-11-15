@@ -7,11 +7,14 @@ import (
 )
 
 const (
-	enterSeq = "\x1b[?1049h\x1b[?7l\x1b[?2004h\x1b[?25l\x1b[0m\x1b[2J\x1b[H"
-	leaveSeq = "\x1b[0m\x1b[2J\x1b[H\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l"
+	enterSeq = "\x1b[?1049h\x1b[?7l\x1b[?25l\x1b[0m\x1b[2J\x1b[H"
+	leaveSeq = "\x1b[0m\x1b[2J\x1b[H\x1b[?7h\x1b[?25h\x1b[?1049l"
+	pasteOn  = "\x1b[?2004h"
+	pasteOff = "\x1b[?2004l"
 )
 
 type Renderer struct {
+	Paste  bool
 	out    io.Writer
 	color  bool
 	prev   []string
@@ -27,7 +30,11 @@ func NewRenderer(out io.Writer, color bool) *Renderer {
 func (r *Renderer) Begin() error {
 	r.active = true
 	r.prev = nil
-	_, err := io.WriteString(r.out, enterSeq)
+	seq := enterSeq
+	if r.Paste {
+		seq += pasteOn
+	}
+	_, err := io.WriteString(r.out, seq)
 	return err
 }
 
@@ -37,7 +44,11 @@ func (r *Renderer) End() error {
 	}
 	r.active = false
 	r.prev = nil
-	_, err := io.WriteString(r.out, leaveSeq)
+	seq := leaveSeq
+	if r.Paste {
+		seq = pasteOff + seq
+	}
+	_, err := io.WriteString(r.out, seq)
 	return err
 }
 

@@ -393,7 +393,7 @@ PS> $env:KMS_DIR = "$env:LOCALAPPDATA\pairier\bob"
 PS> .\kmsd.exe --listen 0.0.0.0:7443
 ```
 
-`kmsctl.exe ui` runs in Windows Terminal and in the console of Windows 10 1809 or later.
+`kmsctl.exe ui` needs Windows Terminal or the console of Windows 10 1809 or later.
 
 ## Running kms-core standalone
 

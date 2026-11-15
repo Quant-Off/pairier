@@ -367,3 +367,41 @@ func TestWrap(t *testing.T) {
 		t.Fatalf("flags not wrapped\n%s", s.Text())
 	}
 }
+
+func TestDialogScrollsLongContent(t *testing.T) {
+	var lines []string
+	for i := 0; i < 30; i++ {
+		lines = append(lines, "line "+string(rune('a'+i%26))+strings.Repeat("x", i))
+	}
+	lines = append(lines, "LAST LINE")
+	d := &Dialog{Title: "t", Lines: lines, Ask: true}
+	s := NewScreen(64, 18)
+	d.Draw(s, Style{})
+	if strings.Contains(s.Text(), "LAST LINE") || !strings.Contains(s.Text(), "Up/Down more") {
+		t.Fatalf("overflow not signalled\n%s", s.Text())
+	}
+	for i := 0; i < 40; i++ {
+		d.Handle(KeyEvent(KeyDown))
+	}
+	s.Clear()
+	d.Draw(s, Style{})
+	if !strings.Contains(s.Text(), "LAST LINE") {
+		t.Fatalf("cannot scroll to the end\n%s", s.Text())
+	}
+	if d.Handle(KeyEvent(KeyDown)) != None || d.Handle(RuneEvent('y')) != Submit {
+		t.Fatal("scrolling changed the answer keys")
+	}
+	var out bytes.Buffer
+	r := NewRenderer(&out, false)
+	_ = r.Begin()
+	_ = r.End()
+	if bytes.Contains(out.Bytes(), []byte("?2004")) {
+		t.Fatal("bracketed paste requested without Paste")
+	}
+	out.Reset()
+	r.Paste = true
+	_ = r.Begin()
+	if !bytes.Contains(out.Bytes(), []byte("\x1b[?2004h")) {
+		t.Fatal("bracketed paste not requested")
+	}
+}

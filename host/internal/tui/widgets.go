@@ -416,7 +416,7 @@ func (f *Form) Draw(s *Screen, base Style) {
 		s.Field(x+2, row, w-4, line, Style{Fg: Red, Bold: true})
 		row++
 	}
-	s.Field(x+2, y+h-1, w-4, " Tab move  Space toggle  Left/Right choose  Enter next  Esc cancel ", base)
+	s.Field(x+2, y+h-1, w-4, " Tab move  Space toggle  Enter next  Esc cancel ", base)
 }
 
 type Dialog struct {
@@ -427,9 +427,24 @@ type Dialog struct {
 	Input   Input
 	Err     string
 	Danger  bool
+	Off     int
 }
 
 func (d *Dialog) Handle(ev Event) Result {
+	switch {
+	case ev.Is(KeyUp):
+		d.Off = max(d.Off-1, 0)
+		return None
+	case ev.Is(KeyDown):
+		d.Off++
+		return None
+	case ev.Is(KeyPgUp):
+		d.Off = max(d.Off-5, 0)
+		return None
+	case ev.Is(KeyPgDn):
+		d.Off += 5
+		return None
+	}
 	if !d.Ask {
 		if ev.Is(KeyEnter) || ev.Is(KeyEsc) || ev.IsRune('q') || ev.IsRune(' ') {
 			return Cancel
@@ -465,14 +480,18 @@ func (d *Dialog) Draw(s *Screen, base Style) {
 	for _, l := range d.Lines {
 		lines = append(lines, Wrap(l, w-4)...)
 	}
-	h := 4 + len(lines)
+	extra := 0
 	if d.Ask && d.Confirm != "" {
-		h += 2
+		extra += 2
 	}
 	if d.Err != "" {
-		h++
+		extra++
 	}
-	h = min(h, s.H)
+	h := min(4+len(lines)+extra, s.H)
+	room := max(h-4-extra, 1)
+	more := len(lines) > room
+	d.Off = min(d.Off, max(len(lines)-room, 0))
+	lines = lines[d.Off:min(d.Off+room, len(lines))]
 	x := (s.W - w) / 2
 	y := max((s.H-h)/2, 0)
 	st := base
@@ -504,6 +523,9 @@ func (d *Dialog) Draw(s *Screen, base Style) {
 		if d.Confirm != "" {
 			hint = " Enter confirm  Esc cancel "
 		}
+	}
+	if more {
+		hint += " Up/Down more "
 	}
 	s.Field(x+2, y+h-1, w-4, hint, st)
 }

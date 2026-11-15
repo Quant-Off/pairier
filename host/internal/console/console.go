@@ -37,8 +37,9 @@ type Options struct {
 	Idle    time.Duration
 	Version string
 	Color   bool
+	Paste   bool
 
-	afterDraw func(*tui.Screen)
+	afterDraw func(s *tui.Screen, handled int)
 	now       func() time.Time
 }
 
@@ -118,6 +119,7 @@ type app struct {
 	lastInput time.Time
 	refreshed time.Time
 	frame     int
+	handled   int
 	quit      bool
 }
 
@@ -139,6 +141,7 @@ func Run(ctx context.Context, t Terminal, o Options) (err error) {
 		w, h = 80, 24
 	}
 	a.screen = tui.NewScreen(w, h)
+	a.rend.Paste = o.Paste
 	if err := a.rend.Begin(); err != nil {
 		return err
 	}
@@ -160,6 +163,7 @@ func Run(ctx context.Context, t Terminal, o Options) (err error) {
 		case ev := <-t.Events():
 			a.lastInput = a.opts.now()
 			a.handle(ev)
+			a.handled++
 		case res := <-a.results:
 			a.finish(res)
 		case <-tick.C:
@@ -456,7 +460,7 @@ func (a *app) draw() {
 
 func (a *app) afterDraw() {
 	if a.opts.afterDraw != nil {
-		a.opts.afterDraw(a.screen)
+		a.opts.afterDraw(a.screen, a.handled)
 	}
 }
 
@@ -497,7 +501,19 @@ func (a *app) drawTabs() {
 
 func (a *app) drawFooter() {
 	s := a.screen
-	s.Field(0, s.H-2, s.W, a.hints(), dim)
+	right := "? help  q quit "
+	if a.phase != phaseMain {
+		right = ""
+	}
+	left := a.hints()
+	if a.phase == phaseMain {
+		if more := "  Tab/1-6 tabs  / filter  Ctrl+R refresh"; tui.StringWidth(left+more+"  "+right) <= s.W {
+			left += more
+		}
+	}
+	rw := tui.StringWidth(right)
+	s.Field(0, s.H-2, s.W-rw, left, dim)
+	s.Put(s.W-rw, s.H-2, right, dim)
 	switch {
 	case a.job != nil:
 		s.Field(0, s.H-1, s.W, fmt.Sprintf(" %c %s ... (Esc cancels)", spinner[a.frame%len(spinner)], a.job.title), warn)
@@ -519,29 +535,28 @@ func (a *app) hints() string {
 	case phaseOpening:
 		return " Esc cancel   q quit"
 	}
-	common := "   Tab/1-6 switch  / filter  Ctrl+R refresh  ? help  q quit"
 	net := !a.opts.Offline
 	switch a.tab {
 	case tabNode:
-		return " c export card  R renew card" + common
+		return " c export card  R renew card"
 	case tabKeys:
-		h := " Enter info  n new  s send  e encrypt  d decrypt  r receive"
+		h := " n new  s send"
 		if net {
 			h += "  p push"
 		}
-		return h + common
+		return h + "  r receive  e/d encrypt/decrypt  Enter info"
 	case tabMembers:
 		h := " a add  w witness heads"
 		if net {
 			h += "  h health"
 		}
-		return h + common
+		return h
 	case tabInbox:
-		return " Enter accept  x reject  i import file" + common
+		return " Enter accept  x reject  i import file"
 	case tabAudit:
-		return " v verify" + common
+		return " v verify"
 	}
-	return common
+	return " Up/Down scroll"
 }
 
 func (a *app) drawStart() {

@@ -247,6 +247,7 @@ func (c *cli) cmdUI(ctx context.Context, args []string) (int, error) {
 		Idle:    *idle,
 		Version: version,
 		Color:   os.Getenv("NO_COLOR") == "",
+		Paste:   runtime.GOOS != "windows",
 	})
 	if err != nil {
 		return 1, err

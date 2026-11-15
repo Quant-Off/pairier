@@ -42,15 +42,16 @@ func (f *fakeTerm) output() []byte {
 }
 
 type harness struct {
-	t      *testing.T
-	term   *fakeTerm
-	mu     sync.Mutex
-	screen string
-	count  int
-	seen   []string
-	frames chan struct{}
-	done   chan error
-	cancel context.CancelFunc
+	t       *testing.T
+	term    *fakeTerm
+	mu      sync.Mutex
+	screen  string
+	handled int
+	sent    int
+	seen    []string
+	frames  chan struct{}
+	done    chan error
+	cancel  context.CancelFunc
 }
 
 func coreBin(t *testing.T) string {
@@ -68,11 +69,11 @@ func launch(t *testing.T, o Options, watch ...string) *harness {
 	if o.Version == "" {
 		o.Version = "test"
 	}
-	o.afterDraw = func(s *tui.Screen) {
+	o.afterDraw = func(s *tui.Screen, handled int) {
 		text := s.Text()
 		h.mu.Lock()
 		h.screen = text
-		h.count++
+		h.handled = handled
 		for _, w := range watch {
 			if strings.Contains(text, w) {
 				h.seen = append(h.seen, w)
@@ -104,22 +105,24 @@ func (h *harness) stop() {
 	}
 }
 
-func (h *harness) frameCount() int {
+func (h *harness) caughtUp() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.count
+	return h.handled >= h.sent
 }
 
 func (h *harness) send(evs ...tui.Event) {
 	for _, ev := range evs {
-		before := h.frameCount()
 		select {
 		case h.term.events <- ev:
 		case <-time.After(10 * time.Second):
 			h.t.Fatalf("ui stopped reading input\n%s", h.text())
 		}
+		h.mu.Lock()
+		h.sent++
+		h.mu.Unlock()
 		deadline := time.Now().Add(10 * time.Second)
-		for h.frameCount() <= before {
+		for !h.caughtUp() {
 			if time.Now().After(deadline) {
 				h.t.Fatalf("no frame after input\n%s", h.text())
 			}
@@ -502,16 +505,39 @@ func TestOfflineModeHidesNetworkActions(t *testing.T) {
 	h.closeDialog("Audit log verified")
 }
 
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
 func TestIdleClosesTheNode(t *testing.T) {
 	bin := coreBin(t)
 	base := t.TempDir()
-	h := launch(t, Options{Node: nodeOpts(bin), Dir: filepath.Join(base, "dave"), Idle: 1500 * time.Millisecond})
+	clk := &clock{t: time.Now()}
+	h := launch(t, Options{Node: nodeOpts(bin), Dir: filepath.Join(base, "dave"), Idle: time.Minute, now: clk.now})
 	h.wait("Initialize node")
 	h.enter()
 	h.typ("dave")
 	h.enter()
 	h.enter()
 	h.closeDialog("Node initialized")
+	time.Sleep(1500 * time.Millisecond)
+	if strings.Contains(h.text(), "without input") {
+		t.Fatal("node closed before the idle time passed")
+	}
+	clk.add(2 * time.Minute)
 	h.wait("without input")
 	if strings.Contains(h.text(), "member dave") {
 		t.Fatalf("node details still shown after idle close\n%s", h.text())
@@ -579,5 +605,42 @@ func TestHelpersRejectBadInput(t *testing.T) {
 	_, _ = l.Write([]byte("a\x1b]0;x\x07b\npartial"))
 	if got := l.snapshot(); len(got) != 1 || !strings.HasSuffix(got[0], "core: a?]0;x?b") {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestSmallTerminals(t *testing.T) {
+	bin := coreBin(t)
+	base := t.TempDir()
+	h := launch(t, Options{Node: nodeOpts(bin), Dir: filepath.Join(base, "frank")})
+	initNode(t, h, "frank", filepath.Join(base, "frank.card"))
+	for _, size := range [][2]int{{80, 24}, {64, 18}} {
+		h.send(tui.ResizeEvent(size[0], size[1]))
+		for tab := '1'; tab <= '6'; tab++ {
+			h.send(tui.RuneEvent(tab))
+			lines := strings.Split(h.text(), "\n")
+			if len(lines) != size[1] || !strings.Contains(lines[1], "6 Log") || !strings.HasSuffix(lines[size[1]-2], "? help  q quit") {
+				t.Fatalf("%dx%d tab %c\n%s", size[0], size[1], tab, h.text())
+			}
+		}
+		h.send(tui.RuneEvent('?'))
+		h.wait("Help")
+		for i := 0; i < 40; i++ {
+			h.send(tui.KeyEvent(tui.KeyDown))
+		}
+		h.wait("clipboard")
+		h.enter()
+		h.send(tui.RuneEvent('5'), tui.RuneEvent('v'))
+		s := h.wait("Verify audit log")
+		for _, label := range []string{"Anchors", "Anchor file", "Peer", "Peer kmsd URL", "Esc cancel"} {
+			if !strings.Contains(s, label) {
+				t.Fatalf("%dx%d verify form lost %q\n%s", size[0], size[1], label, s)
+			}
+		}
+		h.send(tui.KeyEvent(tui.KeyEsc), tui.RuneEvent('2'), tui.RuneEvent('n'))
+		s = h.wait("Generate key")
+		if !strings.Contains(s, "[x] export") {
+			t.Fatalf("%dx%d usage flags cut\n%s", size[0], size[1], s)
+		}
+		h.send(tui.KeyEvent(tui.KeyEsc))
 	}
 }
