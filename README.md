@@ -39,6 +39,7 @@ The following features are also included.
 - Key usage enforcement: the core rejects any operation outside the usage assigned at generation time (ENCRYPT, DECRYPT, SIGN, VERIFY, and so on).
 - Core hardening: on startup the core disables core dumps, denies `ptrace`, sets `no_new_privs` and `umask 077`, scrubs environment variables, closes unneeded `fd`s, verifies the peer UID, and checks the root key file's permissions, owner, and links. On Linux, `mlockall` prevents memory from being swapped. On Windows (experimental since 1.1.0) the core restricts its own process object with a DACL, verifies the peer's user SID and protects files with owner-only DACLs.
 - Strict protocol: fixed 16-byte header, length-prefixed fields, 1 MiB body limit, and rejection of trailing bytes. `HELLO` must come first, and any framing violation terminates the session.
+- Terminal UI: `kmsctl ui` offers every `kmsctl` command in a full-screen interface on Linux, macOS and Windows, built on the Go standard library only. Fingerprints are always typed by the operator, and decrypted data only goes to new private files.
 - Air-gapped build: Rust dependencies are vendored in `core/vendor` and built with `--frozen`. Go builds with `GOPROXY=off` and `-mod=vendor` and has no external dependencies.
 
 ## Build and run

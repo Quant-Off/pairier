@@ -39,6 +39,7 @@
 - 키 용도 강제: 생성 시 지정한 용도(ENCRYPT, DECRYPT, SIGN, VERIFY 등) 외의 연산은 코어 측에서 거부합니다.
 - 코어 하드닝: 시작 시 코어 덤프 차단, `ptrace` 거부, `no_new_privs`, `umask 077`, 환경 변수 제거, 불필요 `fd` 정리, 피어(peer) UID 검증, 루트 키 파일 권한·소유자·링크 검증을 수행합니다. Linux에서는 `mlockall`로 메모리 스와핑(swap)을 막습니다. Windows(1.1.0부터 experimental)에서는 코어가 자기 프로세스 객체를 DACL로 제한하고, 피어의 사용자 SID를 검증하며, 파일을 소유자 전용 DACL로 보호합니다.
 - 엄격한 프로토콜: 고정 16바이트 헤더와 길이 접두 필드, 1MiB 본문 상한, 후행 바이트를 거부합니다. `HELLO` 선행을 강제하며 프레이밍(framing) 위반 시 세션을 끊어냅니다.
+- 터미널 UI: `kmsctl ui`는 모든 `kmsctl` 명령을 Linux, macOS, Windows에서 전체 화면 인터페이스로 제공하며 Go 표준 라이브러리만으로 만들어졌습니다. 지문은 항상 운영자가 직접 입력하고, 복호화한 데이터는 새 비공개 파일로만 저장합니다.
 - 폐쇄 빌드: Rust 의존성은 `core/vendor`에 벤더링되고 `--frozen`으로 빌드합니다. Go는 `GOPROXY=off`, `-mod=vendor`로 빌드하며 외부 의존성이 없습니다.
 
 ## 빌드 및 실행

@@ -258,13 +258,57 @@ Global options may appear before or after the command. `kmsctl --dir X key list`
 | `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | Encrypts. Reads stdin when no input is given.                                                                                                                                    |
 | `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | Decrypts.                                                                                                                                                                        |
 | `audit verify [--anchor SEQ:HASH]... [--anchor-file FILE] [--peer MEMBER --url URL]` | Verifies the audit log chain and every checkpoint signature, and prints the head. Also checks that every given head (`--anchor`, `--anchor-file`, `--peer`) is still in the log. |
+| `ui [--offline] [--idle DUR]`                                                        | Opens the terminal UI described below.                                                                                                                                           |
 | `version`                                                                            | Prints the version and the Go FIPS status.                                                                                                                                       |
 
-If the file given with `--out` already exists, the command fails instead of overwriting it, and new files are created with `0600` permissions. Exit codes are as follows.
+If the file given with `--out` already exists, the command fails instead of overwriting it, and new files are created with `0600` permissions, on Windows with a DACL that allows only you and SYSTEM. Exit codes are as follows.
 
 - Success `0`
 - Execution failure `1`
 - Argument error `2`
+
+## Terminal UI
+
+`kmsctl ui` opens a full-screen terminal interface for everything the commands above do. It calls the same node code, so every action is written to the audit log exactly as the matching command would write it.
+
+```
+alice$ kmsctl --dir ~/.pairier ui
+```
+
+```powershell
+PS> .\kmsctl.exe --dir "$env:LOCALAPPDATA\pairier\bob" ui
+```
+
+Without `--dir` or `$KMS_DIR` it asks for the node directory (default `~/.pairier`, on Windows `%LOCALAPPDATA%\pairier`), and when the directory does not exist it offers to initialize a node there.
+
+| Option       | Default | Description                                                                                           |
+|--------------|---------|-------------------------------------------------------------------------------------------------------|
+| `--offline`  | off     | Hides every action that contacts another node (push, health, peer audit). Use it on air-gapped hosts. |
+| `--idle DUR` | `10m`   | Closes the node and stops the core after this long without input. `0` keeps it open.                  |
+
+The global options (`--dir`, `--core`, `--timeout`, `--allow-unlocked-memory`) apply as usual.
+
+| Tab       | Keys                                                                                                            | Commands                                                                                       |
+|-----------|-----------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| 1 Node    | `c` export card, `R` renew card                                                                                 | `card`, `card renew`                                                                           |
+| 2 Keys    | `Enter` info, `n` new, `s` send to a file, `p` push, `r` receive a file, `e` encrypt a file, `d` decrypt a file | `key list`, `key info`, `key gen`, `key send`, `key push`, `key receive`, `encrypt`, `decrypt` |
+| 3 Members | `a` add, `w` export witnessed heads, `h` health                                                                 | `member list`, `member add`, `member witness`, `peer health`                                   |
+| 4 Inbox   | `Enter` accept, `x` reject, `i` import an envelope file                                                         | `inbox list`, `inbox accept`, `inbox reject`, `key receive`                                    |
+| 5 Audit   | `v` verify with anchors, an anchor file or a peer                                                               | `audit verify`                                                                                 |
+| 6 Log     |                                                                                                                 | Session messages and core stderr, kept in memory only                                          |
+
+On every tab `Tab`, `Shift+Tab` or `1`-`6` switch tabs, the arrow keys or `j`/`k` move, `/` filters the list, `Esc` clears the filter or cancels a running action, `Ctrl+R` refreshes, `?` shows help, and `q` or `Ctrl+C` quits. In a form `Tab` and the arrow keys move between fields, `Space` toggles, `Left`/`Right` choose, and `Enter` moves to the next field and submits on the last one.
+
+The UI behaves differently from a shell session in a few places.
+
+- Adding a member asks you to type or paste the fingerprint you received over the other channel. The UI never fills it in from the card file.
+- Sending, pushing, accepting and rejecting ask for confirmation and show the member fingerprint. Renewing the card asks you to type the member id.
+- Encryption and decryption work on files only, up to 1 MiB. Decrypted data is written to a new file that only you can read (`0600`, on Windows an owner-only DACL) and is never drawn on the screen. Existing files are never overwritten.
+- Labels, member ids, error messages from other nodes and core output are drawn with control and bidirectional formatting characters replaced by `?`, so none of them can inject terminal escape sequences. The UI sets no window title and does not use the clipboard.
+- The node is opened once per session and the lists refresh every 15 seconds, so envelopes that `kmsd` receives appear without a restart. `kmsd` can keep running on the same directory.
+- When `--idle` expires the node is closed, the core process exits and the screen is cleared. `Enter` opens the node again.
+
+It needs an interactive terminal on both standard input and output, at least 64 columns by 18 rows. On Linux and macOS any terminal that understands xterm sequences works, but not `TERM=dumb`. On Windows use Windows Terminal, or PowerShell or cmd in the console of Windows 10 1809 or later. The mintty window of Git Bash is not a console, so start the UI from Windows Terminal or through `winpty`. On Windows the UI is experimental like the rest of the Windows support.
 
 ## Key usage
 
@@ -348,6 +392,8 @@ The commands are the same as on Linux with the `.exe` suffix, and `kmsctl.exe` a
 PS> $env:KMS_DIR = "$env:LOCALAPPDATA\pairier\bob"
 PS> .\kmsd.exe --listen 0.0.0.0:7443
 ```
+
+`kmsctl.exe ui` runs in Windows Terminal and in the console of Windows 10 1809 or later.
 
 ## Running kms-core standalone
 
@@ -450,3 +496,6 @@ The directory that holds the socket must be owned by the core user or root. A di
 | `store: insecure directory: ... is not owned by the current user`                | On Windows the file or directory was created by another account, or by a tool running elevated, so its owner is Administrators. Take ownership with `icacls PATH /setowner "%USERNAME%" /T` or recreate it with `kmsctl init`. The core reports the root key the same way as `object is not owned by the current user`. |
 | `store: insecure directory: ... is on a network drive`                           | Move the node directory to a local volume.                                                                                                                                      |
 | `transport: --socket: unsupported`                                               | The standalone socket mode is not available on Windows. Let `kmsctl` or `kmsd` start the core.                                                                                  |
+| `ui: term: standard input and output must be an interactive terminal`            | Input or output is redirected, or the shell has no console, such as Git Bash in mintty. Run it directly in a terminal; on Windows use Windows Terminal, PowerShell or cmd, or `winpty kmsctl ui`. |
+| `ui: term: the console does not support virtual terminal sequences`              | The Windows console is older than Windows 10 1809. Use Windows Terminal or a newer Windows.                                                                                     |
+| `terminal too small`                                                             | The window is smaller than 64 columns by 18 rows. Enlarge it; the UI redraws on its own.                                                                                        |

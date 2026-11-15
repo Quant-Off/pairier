@@ -258,13 +258,57 @@ send the new card and fingerprint to every member and restart kmsd
 | `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | 암호화합니다. 입력이 없으면 stdin을 씁니다.                                                                                      |
 | `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | 복호화합니다.                                                                                                          |
 | `audit verify [--anchor SEQ:HASH]... [--anchor-file FILE] [--peer MEMBER --url URL]` | 감사 로그 체인과 모든 체크포인트 서명을 검증하고 head를 출력합니다. 주어진 head(`--anchor`, `--anchor-file`, `--peer`)가 모두 로그에 그대로 있는지도 확인합니다. |
+| `ui [--offline] [--idle DUR]`                                                        | 아래에서 설명하는 터미널 UI를 엽니다.                                                                                           |
 | `version`                                                                            | 버전과 Go FIPS 상태를 출력합니다.                                                                                           |
 
-`--out`으로 지정한 파일이 이미 있으면 덮어쓰지 않고 실패하며, 새 파일은 `0600` 권한으로 만들어집니다. 종료 코드는 다음과 같습니다.
+`--out`으로 지정한 파일이 이미 있으면 덮어쓰지 않고 실패하며, 새 파일은 `0600` 권한으로, Windows에서는 본인과 SYSTEM만 허용하는 DACL로 만들어집니다. 종료 코드는 다음과 같습니다.
 
 - 성공 `0`
 - 실행 실패 `1`
 - 인자 오류 `2`
+
+## 터미널 UI
+
+`kmsctl ui`는 위의 명령이 하는 모든 일을 전체 화면 터미널 인터페이스로 제공합니다. 명령과 같은 노드 코드를 호출하므로, 모든 동작은 해당 명령을 실행했을 때와 똑같이 감사 로그에 기록됩니다.
+
+```
+alice$ kmsctl --dir ~/.pairier ui
+```
+
+```powershell
+PS> .\kmsctl.exe --dir "$env:LOCALAPPDATA\pairier\bob" ui
+```
+
+`--dir`이나 `$KMS_DIR`이 없으면 노드 디렉토리를 묻고(기본값 `~/.pairier`, Windows는 `%LOCALAPPDATA%\pairier`), 디렉토리가 없으면 그 자리에 노드를 초기화하는 화면을 띄웁니다.
+
+| 옵션           | 기본값   | 설명                                                                   |
+|--------------|-------|----------------------------------------------------------------------|
+| `--offline`  | 꺼짐    | 다른 노드에 접속하는 동작(push, health, 상대 노드 감사 검증)을 모두 숨깁니다. 폐쇄망 호스트에서 사용합니다. |
+| `--idle DUR` | `10m` | 입력 없이 이 시간이 지나면 노드를 닫고 코어를 종료합니다. `0`이면 닫지 않습니다.                     |
+
+전역 옵션(`--dir`, `--core`, `--timeout`, `--allow-unlocked-memory`)은 그대로 적용됩니다.
+
+| 탭         | 키                                                                            | 대응 명령                                                                                          |
+|-----------|------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| 1 Node    | `c` 카드 내보내기, `R` 카드 갱신                                                       | `card`, `card renew`                                                                           |
+| 2 Keys    | `Enter` 정보, `n` 생성, `s` 파일로 보내기, `p` push, `r` 파일 받기, `e` 파일 암호화, `d` 파일 복호화 | `key list`, `key info`, `key gen`, `key send`, `key push`, `key receive`, `encrypt`, `decrypt` |
+| 3 Members | `a` 추가, `w` 증인 head 내보내기, `h` health                                         | `member list`, `member add`, `member witness`, `peer health`                                   |
+| 4 Inbox   | `Enter` 수락, `x` 거절, `i` 봉투 파일 가져오기                                           | `inbox list`, `inbox accept`, `inbox reject`, `key receive`                                    |
+| 5 Audit   | `v` anchor, anchor 파일, 상대 노드로 검증                                             | `audit verify`                                                                                 |
+| 6 Log     |                                                                              | 세션 메시지와 코어 stderr, 메모리에만 보관                                                                    |
+
+모든 탭에서 `Tab`, `Shift+Tab`이나 `1`-`6`으로 탭을 바꾸고, 화살표나 `j`/`k`로 이동하며, `/`로 목록을 거르고, `Esc`로 필터를 지우거나 실행 중인 동작을 취소하고, `Ctrl+R`로 새로 고치고, `?`로 도움말을 보고, `q`나 `Ctrl+C`로 끝냅니다. 폼에서는 `Tab`과 화살표로 필드를 옮기고, `Space`로 켜고 끄며, `Left`/`Right`로 고르고, `Enter`로 다음 필드로 넘어가며 마지막 필드에서 제출합니다.
+
+셸에서 명령을 쓸 때와 다른 점은 다음과 같습니다.
+
+- 구성원을 추가할 때는 다른 채널로 받은 지문을 직접 입력하거나 붙여 넣어야 합니다. UI는 카드 파일에서 지문을 채워 넣지 않습니다.
+- 보내기, push, 수락, 거절은 확인을 받고 구성원 지문을 보여 줍니다. 카드 갱신은 구성원 id를 직접 입력해야 진행됩니다.
+- 암호화와 복호화는 1 MiB까지의 파일만 다룹니다. 복호화한 데이터는 본인만 읽을 수 있는 새 파일(`0600`, Windows는 소유자 전용 DACL)에만 쓰고 화면에는 그리지 않습니다. 이미 있는 파일은 덮어쓰지 않습니다.
+- 라벨, 구성원 id, 다른 노드가 보낸 오류 메시지, 코어 출력은 제어 문자와 양방향 서식 문자를 `?`로 바꿔 그리므로 터미널 이스케이프 시퀀스를 주입할 수 없습니다. UI는 창 제목을 바꾸지 않고 클립보드도 쓰지 않습니다.
+- 노드는 세션마다 한 번 열리고 목록은 15초마다 새로 고쳐지므로, `kmsd`가 받은 봉투가 다시 시작하지 않아도 나타납니다. 같은 디렉토리에서 `kmsd`를 계속 실행해도 됩니다.
+- `--idle` 시간이 지나면 노드를 닫고 코어 프로세스를 끝내며 화면을 지웁니다. `Enter`를 누르면 다시 엽니다.
+
+표준 입력과 출력이 모두 대화형 터미널이어야 하고, 최소 64열 18행이 필요합니다. Linux와 macOS에서는 xterm 시퀀스를 이해하는 터미널이면 되지만 `TERM=dumb`는 안 됩니다. Windows에서는 Windows Terminal을 쓰거나, Windows 10 1809 이상의 콘솔에서 PowerShell이나 cmd를 쓰세요. Git Bash의 mintty 창은 콘솔이 아니므로 Windows Terminal에서 실행하거나 `winpty`를 거쳐 실행해야 합니다. Windows에서 UI는 다른 Windows 지원과 마찬가지로 experimental입니다.
 
 ## 키 용도
 
@@ -348,6 +392,8 @@ Linux에서 코어는 `mlockall` 시스템 콜로 모든 메모리를 잠급니�
 PS> $env:KMS_DIR = "$env:LOCALAPPDATA\pairier\bob"
 PS> .\kmsd.exe --listen 0.0.0.0:7443
 ```
+
+`kmsctl.exe ui`는 Windows Terminal과 Windows 10 1809 이상의 콘솔에서 실행됩니다.
 
 ## kms-core 단독 실행
 
@@ -450,3 +496,6 @@ $ kms-core --socket /run/pairier/core.sock --root-key-file /path/root.key --pqc 
 | `store: insecure directory: ... is not owned by the current user`                | Windows에서 다른 계정이나 관리자 권한으로 올린 도구가 만든 파일이나 디렉토리라 소유자가 Administrators입니다. `icacls PATH /setowner "%USERNAME%" /T`로 소유권을 가져오거나 `kmsctl init`으로 다시 만들어야 합니다. 루트 키는 코어가 `object is not owned by the current user`로 같은 상황을 보고합니다. |
 | `store: insecure directory: ... is on a network drive`                           | 노드 디렉토리를 로컬 볼륨으로 옮겨야 합니다.                                                                           |
 | `transport: --socket: unsupported`                                               | Windows에서는 단독 소켓 모드를 쓸 수 없습니다. `kmsctl`이나 `kmsd`가 코어를 기동하게 해야 합니다.                                  |
+| `ui: term: standard input and output must be an interactive terminal`            | 입력이나 출력이 리디렉션되었거나, Git Bash의 mintty처럼 콘솔이 없는 셸입니다. 터미널에서 직접 실행하고, Windows에서는 Windows Terminal, PowerShell, cmd를 쓰거나 `winpty kmsctl ui`로 실행해야 합니다. |
+| `ui: term: the console does not support virtual terminal sequences`              | Windows 10 1809보다 오래된 콘솔입니다. Windows Terminal이나 더 새로운 Windows를 써야 합니다.                              |
+| `terminal too small`                                                             | 창이 64열 18행보다 작습니다. 창을 키우면 UI가 스스로 다시 그립니다.                                                          |
