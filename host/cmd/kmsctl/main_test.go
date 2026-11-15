@@ -28,19 +28,6 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func TestParseAndFormatUsage(t *testing.T) {
-	bits, err := parseUsage("Encrypt, decrypt,export")
-	if err != nil || formatUsage(bits) != "encrypt,decrypt,export" {
-		t.Fatalf("%v %v", bits, err)
-	}
-	if _, err := parseUsage("encrypt,bogus"); err == nil {
-		t.Fatal("unknown usage accepted")
-	}
-	if _, err := parseUsage(""); err == nil {
-		t.Fatal("empty usage accepted")
-	}
-}
-
 func TestUsageAndVersion(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run(nil, nil, &out, &errb); code != 2 {

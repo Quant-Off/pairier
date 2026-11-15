@@ -47,34 +47,6 @@ commands:
   version
 `
 
-var usageNames = map[string]uint32{
-	"encrypt":     wire.UsageEncrypt,
-	"decrypt":     wire.UsageDecrypt,
-	"sign":        wire.UsageSign,
-	"verify":      wire.UsageVerify,
-	"wrap":        wire.UsageWrap,
-	"unwrap":      wire.UsageUnwrap,
-	"derive":      wire.UsageDerive,
-	"decapsulate": wire.UsageDecapsulate,
-	"export":      wire.UsageExport,
-}
-
-var usageOrder = []string{"encrypt", "decrypt", "sign", "verify", "wrap", "unwrap", "derive", "decapsulate", "export"}
-
-var algNames = map[uint16]string{
-	wire.AlgAES256GCM:          "aes-256-gcm",
-	wire.AlgECDSAP256SHA256:    "ecdsa-p256-sha256",
-	wire.AlgECDSAP384SHA384:    "ecdsa-p384-sha384",
-	wire.AlgEd25519:            "ed25519",
-	wire.AlgDHKEMP256:          "dhkem-p256",
-	wire.AlgMLDSA65:            "ml-dsa-65",
-	wire.AlgMLDSA87:            "ml-dsa-87",
-	wire.AlgMLKEM768:           "ml-kem-768",
-	wire.AlgMLKEM1024:          "ml-kem-1024",
-	wire.AlgHybridP256MLKEM768: "hybrid-p256-ml-kem-768",
-	wire.AlgMLKEM768P256:       "mlkem768-p256",
-}
-
 type cli struct {
 	stdin         io.Reader
 	stdout        io.Writer
@@ -267,7 +239,7 @@ func (c *cli) cmdInit(ctx context.Context, args []string) (int, error) {
 		return 1, err
 	}
 	fmt.Fprintf(c.stdout, "member\t%s\nidentity\t%s\nkem\t%s\ncore_fips\t%v\ngo_fips\t%v\npqc\t%v\nfingerprint\t%s\n",
-		card.MemberID, algName(card.IdentityAlg), algName(card.KemAlg), n.FIPS(), fips140.Enabled(), n.PQC(), fp)
+		card.MemberID, wire.AlgName(card.IdentityAlg), wire.AlgName(card.KemAlg), n.FIPS(), fips140.Enabled(), n.PQC(), fp)
 	return 0, nil
 }
 
@@ -313,7 +285,7 @@ func (c *cli) cmdCardRenew(ctx context.Context, args []string) (int, error) {
 	if err := c.writeOut(*out, raw); err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(c.stderr, "member\t%s\nkem\t%s\nfingerprint\t%s\n", card.MemberID, algName(card.KemAlg), fp)
+	fmt.Fprintf(c.stderr, "member\t%s\nkem\t%s\nfingerprint\t%s\n", card.MemberID, wire.AlgName(card.KemAlg), fp)
 	fmt.Fprintln(c.stderr, "send the new card and fingerprint to every member and restart kmsd")
 	return 0, nil
 }
@@ -368,7 +340,7 @@ func (c *cli) cmdMemberList(ctx context.Context, args []string) (int, error) {
 		if err != nil {
 			return 1, fmt.Errorf("member %s: %w", m.MemberID, err)
 		}
-		fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\n", m.MemberID, algName(card.IdentityAlg), algName(card.KemAlg), m.Fingerprint)
+		fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\n", m.MemberID, wire.AlgName(card.IdentityAlg), wire.AlgName(card.KemAlg), m.Fingerprint)
 	}
 	return 0, nil
 }
@@ -380,7 +352,7 @@ func (c *cli) cmdKeyGen(ctx context.Context, args []string) (int, error) {
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 2, errors.New("key gen: invalid arguments")
 	}
-	bits, err := parseUsage(*usage)
+	bits, err := wire.ParseUsage(*usage)
 	if err != nil {
 		return 2, err
 	}
@@ -393,7 +365,7 @@ func (c *cli) cmdKeyGen(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\n", rec.KeyID, algName(rec.Alg), formatUsage(rec.Usage), rec.Label)
+	fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\n", rec.KeyID, wire.AlgName(rec.Alg), wire.FormatUsage(rec.Usage), rec.Label)
 	return 0, nil
 }
 
@@ -416,7 +388,7 @@ func (c *cli) cmdKeyList(ctx context.Context, args []string) (int, error) {
 		if k.Origin != nil {
 			origin = "from " + k.Origin.Sender
 		}
-		fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\t%s\n", k.KeyID, algName(k.Alg), formatUsage(k.Usage), k.Label, origin)
+		fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\t%s\n", k.KeyID, wire.AlgName(k.Alg), wire.FormatUsage(k.Usage), k.Label, origin)
 	}
 	return 0, nil
 }
@@ -436,7 +408,7 @@ func (c *cli) cmdKeyInfo(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(c.stdout, "id\t%s\nalg\t%s\nusage\t%s\nlabel\t%s\ncreated\t%s\n", k.KeyID, algName(k.Alg), formatUsage(k.Usage), k.Label, time.Unix(k.CreatedAt, 0).UTC().Format(time.RFC3339))
+	fmt.Fprintf(c.stdout, "id\t%s\nalg\t%s\nusage\t%s\nlabel\t%s\ncreated\t%s\n", k.KeyID, wire.AlgName(k.Alg), wire.FormatUsage(k.Usage), k.Label, time.Unix(k.CreatedAt, 0).UTC().Format(time.RFC3339))
 	if k.Origin != nil {
 		fmt.Fprintf(c.stdout, "origin\t%s\t%s\n", k.Origin.Sender, time.Unix(k.Origin.SentAt, 0).UTC().Format(time.RFC3339))
 	}
@@ -455,7 +427,7 @@ func (c *cli) cmdKeySend(ctx context.Context, args []string) (int, error) {
 	if *id == "" || *to == "" {
 		return 2, errors.New("key send: --id and --to are required")
 	}
-	bits, err := parseUsage(*usage)
+	bits, err := wire.ParseUsage(*usage)
 	if err != nil {
 		return 2, err
 	}
@@ -471,7 +443,7 @@ func (c *cli) cmdKeySend(ctx context.Context, args []string) (int, error) {
 	if err := c.writeOut(*out, env); err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(c.stderr, "sent\t%s\tto\t%s\tusage\t%s\n", *id, *to, formatUsage(bits))
+	fmt.Fprintf(c.stderr, "sent\t%s\tto\t%s\tusage\t%s\n", *id, *to, wire.FormatUsage(bits))
 	return 0, nil
 }
 
@@ -494,7 +466,7 @@ func (c *cli) cmdKeyReceive(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\tfrom %s\n", rec.KeyID, algName(rec.Alg), formatUsage(rec.Usage), rec.Label, rec.Origin.Sender)
+	fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\tfrom %s\n", rec.KeyID, wire.AlgName(rec.Alg), wire.FormatUsage(rec.Usage), rec.Label, rec.Origin.Sender)
 	return 0, nil
 }
 
@@ -513,7 +485,7 @@ func (c *cli) cmdKeyPush(ctx context.Context, args []string) (int, error) {
 	if !strings.HasPrefix(*url, "https://") {
 		return 2, errors.New("key push: --url must use https")
 	}
-	bits, err := parseUsage(*usage)
+	bits, err := wire.ParseUsage(*usage)
 	if err != nil {
 		return 2, err
 	}
@@ -569,7 +541,7 @@ func (c *cli) cmdInboxAccept(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\tfrom %s\n", rec.KeyID, algName(rec.Alg), formatUsage(rec.Usage), rec.Label, rec.Origin.Sender)
+	fmt.Fprintf(c.stdout, "%s\t%s\t%s\t%s\tfrom %s\n", rec.KeyID, wire.AlgName(rec.Alg), wire.FormatUsage(rec.Usage), rec.Label, rec.Origin.Sender)
 	return 0, nil
 }
 
@@ -761,40 +733,4 @@ func (c *cli) writeOut(path string, data []byte) error {
 		return err
 	}
 	return fsx.WriteNew(path, data)
-}
-
-func parseUsage(s string) (uint32, error) {
-	var bits uint32
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(strings.ToLower(part))
-		if part == "" {
-			continue
-		}
-		b, ok := usageNames[part]
-		if !ok {
-			return 0, fmt.Errorf("unknown usage %q", part)
-		}
-		bits |= b
-	}
-	if bits == 0 {
-		return 0, errors.New("usage list is empty")
-	}
-	return bits, nil
-}
-
-func formatUsage(bits uint32) string {
-	var parts []string
-	for _, name := range usageOrder {
-		if bits&usageNames[name] != 0 {
-			parts = append(parts, name)
-		}
-	}
-	return strings.Join(parts, ",")
-}
-
-func algName(alg uint16) string {
-	if s, ok := algNames[alg]; ok {
-		return s
-	}
-	return fmt.Sprintf("0x%04x", alg)
 }
