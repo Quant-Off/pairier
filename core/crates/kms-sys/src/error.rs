@@ -23,6 +23,16 @@ impl Error {
         Self::new(op, io::Error::new(io::ErrorKind::InvalidInput, msg))
     }
 
+    pub(crate) fn message(op: &'static str, kind: io::ErrorKind, msg: String) -> Self {
+        Self::new(op, io::Error::new(kind, msg))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn code(op: &'static str, code: u32) -> Self {
+        let raw = i32::try_from(code).unwrap_or(i32::MAX);
+        Self::new(op, io::Error::from_raw_os_error(raw))
+    }
+
     #[must_use]
     pub fn unsupported(op: &'static str) -> Self {
         Self::new(op, io::Error::from(io::ErrorKind::Unsupported))

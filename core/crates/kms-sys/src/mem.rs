@@ -5,20 +5,23 @@ use zeroize::Zeroize;
 
 use crate::error::Error;
 
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+use unix as sys;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as sys;
+
+use sys::page_size;
+
 pub struct LockedBuf {
     data: NonNull<u8>,
     len: usize,
     data_len: usize,
     map: NonNull<u8>,
     map_len: usize,
-}
-
-fn page_size() -> Result<usize, Error> {
-    let v = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    usize::try_from(v)
-        .ok()
-        .filter(|p| *p > 0 && p.is_power_of_two())
-        .ok_or_else(|| Error::unsupported("sysconf(_SC_PAGESIZE)"))
 }
 
 impl LockedBuf {
@@ -36,21 +39,7 @@ impl LockedBuf {
             .and_then(|g| g.checked_add(data_len))
             .ok_or_else(|| Error::invalid("LockedBuf::new", "length overflow"))?;
 
-        let raw = unsafe {
-            libc::mmap(
-                core::ptr::null_mut(),
-                map_len,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-        if raw == libc::MAP_FAILED {
-            return Err(Error::last("mmap"));
-        }
-        let map =
-            NonNull::new(raw.cast::<u8>()).ok_or_else(|| Error::invalid("mmap", "null map"))?;
+        let map = unsafe { sys::map(map_len) }?;
         let guard = Self {
             data: map,
             len: 0,
@@ -61,21 +50,11 @@ impl LockedBuf {
 
         let data_ptr = unsafe { map.as_ptr().add(page) };
         let tail_ptr = unsafe { data_ptr.add(data_len) };
-        if unsafe { libc::mprotect(map.as_ptr().cast(), page, libc::PROT_NONE) } != 0 {
-            return Err(Error::last("mprotect(head guard)"));
-        }
-        if unsafe { libc::mprotect(tail_ptr.cast(), page, libc::PROT_NONE) } != 0 {
-            return Err(Error::last("mprotect(tail guard)"));
-        }
-        if unsafe { libc::mlock(data_ptr.cast(), data_len) } != 0 {
-            return Err(Error::last("mlock"));
-        }
-        #[cfg(target_os = "linux")]
-        if unsafe { libc::madvise(data_ptr.cast(), data_len, libc::MADV_DONTDUMP) } != 0 {
-            return Err(Error::last("madvise(MADV_DONTDUMP)"));
-        }
+        unsafe { sys::guard(map.as_ptr(), page) }?;
+        unsafe { sys::guard(tail_ptr, page) }?;
+        unsafe { sys::lock(data_ptr, data_len) }?;
 
-        let data = NonNull::new(data_ptr).ok_or_else(|| Error::invalid("mmap", "null data"))?;
+        let data = NonNull::new(data_ptr).ok_or_else(|| Error::invalid("map", "null data"))?;
         let mut out = guard;
         out.data = data;
         out.len = len;
@@ -109,13 +88,9 @@ impl Drop for LockedBuf {
             let whole =
                 unsafe { core::slice::from_raw_parts_mut(self.data.as_ptr(), self.data_len) };
             whole.zeroize();
-            unsafe {
-                libc::munlock(self.data.as_ptr().cast(), self.data_len);
-            }
+            unsafe { sys::unlock(self.data.as_ptr(), self.data_len) };
         }
-        unsafe {
-            libc::munmap(self.map.as_ptr().cast(), self.map_len);
-        }
+        unsafe { sys::unmap(self.map.as_ptr(), self.map_len) };
     }
 }
 

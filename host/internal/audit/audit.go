@@ -16,16 +16,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 )
 
 const (
-	fileMode  = 0o600
-	maxLine   = 64 * 1024
-	hashLen   = sha256.Size
-	genesis   = "0000000000000000000000000000000000000000000000000000000000000000"
-	MaxFields = 32
+	fileMode   = 0o600
+	maxLine    = 64 * 1024
+	lockSuffix = ".lock"
+	hashLen    = sha256.Size
+	genesis    = "0000000000000000000000000000000000000000000000000000000000000000"
+	MaxFields  = 32
 )
 
 var (
@@ -116,6 +118,7 @@ type Entry struct {
 type Log struct {
 	mu       sync.Mutex
 	f        *os.File
+	lockf    *os.File
 	seq      uint64
 	prev     string
 	head     *Entry
@@ -148,37 +151,46 @@ func Open(path string, o Options) (*Log, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o077 != 0 {
+	if !fi.Mode().IsRegular() {
 		_ = f.Close()
 		return nil, fmt.Errorf("%w: %s", ErrInsecure, path)
+	}
+	if err := fsx.CheckPrivateFile(path); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %v", ErrInsecure, err)
 	}
 	if lfi, err := os.Lstat(path); err != nil || lfi.Mode()&fs.ModeSymlink != 0 {
 		_ = f.Close()
 		return nil, fmt.Errorf("%w: %s is a symlink", ErrInsecure, path)
 	}
-	l := &Log{f: f, prev: genesis, now: now, signer: o.Signer, verifier: o.Verifier}
-	if err := l.lock(); err != nil {
+	lockf, err := fsx.OpenNoFollow(path+lockSuffix, os.O_RDWR|os.O_CREATE, fileMode)
+	if err != nil {
 		_ = f.Close()
+		return nil, err
+	}
+	l := &Log{f: f, lockf: lockf, prev: genesis, now: now, signer: o.Signer, verifier: o.Verifier}
+	if err := l.lock(); err != nil {
+		_ = l.Close()
 		return nil, err
 	}
 	err = l.catchUp()
 	l.unlock()
 	if err != nil {
-		_ = f.Close()
+		_ = l.Close()
 		return nil, err
 	}
 	return l, nil
 }
 
 func (l *Log) lock() error {
-	if err := syscall.Flock(int(l.f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := fsx.Lock(l.lockf); err != nil {
 		return fmt.Errorf("audit: lock: %w", err)
 	}
 	return nil
 }
 
 func (l *Log) unlock() {
-	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
+	_ = fsx.Unlock(l.lockf)
 }
 
 func (l *Log) catchUp() error {
@@ -219,7 +231,7 @@ func (l *Log) Head() (uint64, string) {
 func (l *Log) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.f.Close()
+	return errors.Join(l.f.Close(), l.lockf.Close())
 }
 
 func (l *Log) Seq() uint64 {

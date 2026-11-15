@@ -22,6 +22,7 @@ import (
 	"github.com/Quant-Off/pairier/host/internal/audit"
 	"github.com/Quant-Off/pairier/host/internal/core"
 	"github.com/Quant-Off/pairier/host/internal/exchange"
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 	"github.com/Quant-Off/pairier/host/internal/store"
 	"github.com/Quant-Off/pairier/host/internal/wire"
 )
@@ -199,7 +200,7 @@ func (o *Options) resolveCore() error {
 	if err != nil {
 		return fmt.Errorf("node: core binary: %w", err)
 	}
-	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+	if !fsx.IsExecutable(fi, abs) {
 		return fmt.Errorf("node: core binary %s is not an executable file", abs)
 	}
 	o.CoreBinary = abs

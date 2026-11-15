@@ -13,11 +13,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
+
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 )
 
 const (
-	dirMode  = 0o700
 	fileMode = 0o600
 
 	keysDir    = "keys"
@@ -144,14 +144,14 @@ type InboxRecord struct {
 
 func Init(dir string) (*Store, error) {
 	created := true
-	if err := os.Mkdir(dir, dirMode); err != nil {
+	if err := fsx.MkdirPrivate(dir); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			created = false
 			entries, rerr := os.ReadDir(dir)
 			if rerr != nil || len(entries) != 0 {
 				return nil, fmt.Errorf("%w: %s is not empty", ErrExists, dir)
 			}
-			if err := os.Chmod(dir, dirMode); err != nil {
+			if err := fsx.MakePrivate(dir); err != nil {
 				return nil, err
 			}
 		} else {
@@ -159,11 +159,11 @@ func Init(dir string) (*Store, error) {
 		}
 	}
 	for _, sub := range []string{keysDir, membersDir, inboxDir} {
-		if err := os.Mkdir(filepath.Join(dir, sub), dirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+		if err := fsx.MkdirPrivate(filepath.Join(dir, sub)); err != nil && !errors.Is(err, fs.ErrExist) {
 			return nil, err
 		}
 	}
-	if err := syncDir(dir); err != nil {
+	if err := fsx.SyncDir(dir); err != nil {
 		return nil, err
 	}
 	st, err := Open(dir)
@@ -190,7 +190,7 @@ func (s *Store) Discard() error {
 	if s.created {
 		errs = append(errs, os.Remove(s.dir))
 	} else {
-		errs = append(errs, syncDir(s.dir))
+		errs = append(errs, fsx.SyncDir(s.dir))
 	}
 	return errors.Join(errs...)
 }
@@ -231,21 +231,11 @@ func Open(dir string) (*Store, error) {
 }
 
 func checkDir(path string) error {
-	fi, err := os.Lstat(path)
-	if err != nil {
+	if err := fsx.CheckPrivateDir(path); err != nil {
+		if errors.Is(err, fsx.ErrInsecure) {
+			return fmt.Errorf("%w: %v", ErrInsecure, err)
+		}
 		return err
-	}
-	if fi.Mode()&fs.ModeSymlink != 0 {
-		return fmt.Errorf("%w: %s is a symlink", ErrInsecure, path)
-	}
-	if !fi.IsDir() {
-		return fmt.Errorf("%w: %s is not a directory", ErrInsecure, path)
-	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%w: %s is accessible by group or others", ErrInsecure, path)
-	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
-		return fmt.Errorf("%w: %s is not owned by the current user", ErrInsecure, path)
 	}
 	return nil
 }
@@ -462,7 +452,7 @@ func (s *Store) DeleteInbox(id string) error {
 		}
 		return err
 	}
-	return syncDir(filepath.Dir(path))
+	return fsx.SyncDir(filepath.Dir(path))
 }
 
 func (s *Store) GetWitness(member string) (*WitnessRecord, error) {
@@ -484,21 +474,21 @@ func (s *Store) UpdateWitness(member string, update func(*WitnessRecord) (bool, 
 		return ErrBadID
 	}
 	dir := filepath.Join(s.dir, witnessDir)
-	if err := os.Mkdir(dir, dirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+	if err := fsx.MkdirPrivate(dir); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
 	if err := checkDir(dir); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, lockFile), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, fileMode)
+	lock, err := fsx.OpenNoFollow(filepath.Join(dir, lockFile), os.O_RDWR|os.O_CREATE, fileMode)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err := fsx.Lock(lock); err != nil {
 		return fmt.Errorf("store: lock witness: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = fsx.Unlock(lock) }()
 	rec, err := s.GetWitness(member)
 	exists := err == nil
 	if errors.Is(err, ErrNotFound) {
@@ -542,18 +532,14 @@ func (s *Store) listIDs(sub, ext string, valid func(string) bool) ([]string, err
 
 func (s *Store) read(rel string, v any) error {
 	path := filepath.Join(s.dir, rel)
-	fi, err := os.Lstat(path)
-	if err != nil {
+	if err := fsx.CheckPrivateFile(path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return ErrNotFound
 		}
+		if errors.Is(err, fsx.ErrInsecure) {
+			return fmt.Errorf("%w: %s: %v", ErrInsecure, rel, err)
+		}
 		return err
-	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("%w: %s is not a regular file", ErrInsecure, rel)
-	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%w: %s is accessible by group or others", ErrInsecure, rel)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -618,11 +604,11 @@ func (s *Store) replace(rel string, v any) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := fsx.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
-	return syncDir(filepath.Dir(path))
+	return fsx.SyncDir(filepath.Dir(path))
 }
 
 func (s *Store) writeNew(rel string, v any) error {
@@ -646,14 +632,5 @@ func (s *Store) writeNew(rel string, v any) error {
 	if err := os.Remove(tmp); err != nil {
 		return err
 	}
-	return syncDir(filepath.Dir(path))
-}
-
-func syncDir(path string) error {
-	d, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return fsx.SyncDir(filepath.Dir(path))
 }

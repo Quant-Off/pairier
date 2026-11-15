@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -316,7 +317,7 @@ func TestOptionsArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "--fd 3 --root-key-file /k --pqc --allow-unlocked-memory"
+	want := "--root-key-file /k --pqc --allow-unlocked-memory"
 	if got := strings.Join(args, " "); got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
@@ -475,6 +476,9 @@ func TestRealCoreExchange(t *testing.T) {
 
 func TestRealCoreConnect(t *testing.T) {
 	bin := realBinary(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("socket mode is not supported on windows")
+	}
 	dir := t.TempDir()
 	sock := dir + "/core.sock"
 	cmd := exec.Command(bin, "--socket", sock, "--ephemeral-root", "--allow-unlocked-memory")

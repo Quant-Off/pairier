@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"os"
 	"time"
+
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 )
 
 var ErrInvalid = errors.New("config: invalid configuration")
@@ -22,15 +23,11 @@ type Config struct {
 }
 
 func Load(path string) (*Config, error) {
-	fi, err := os.Lstat(path)
-	if err != nil {
+	if err := fsx.CheckNotWritableByOthers(path); err != nil {
+		if errors.Is(err, fsx.ErrInsecure) {
+			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
 		return nil, err
-	}
-	if fi.Mode()&fs.ModeSymlink != 0 || !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%w: %s is not a regular file", ErrInvalid, path)
-	}
-	if fi.Mode().Perm()&0o022 != 0 {
-		return nil, fmt.Errorf("%w: %s is writable by group or others", ErrInvalid, path)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

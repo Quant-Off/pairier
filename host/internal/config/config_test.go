@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -36,12 +37,14 @@ func TestLoadAndValidate(t *testing.T) {
 			t.Fatalf("%s accepted: %v", name, err)
 		}
 	}
-	loose := write(t, `{"dir":"x"}`, 0o600)
-	if err := os.Chmod(loose, 0o666); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(loose); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("world writable config accepted: %v", err)
+	if runtime.GOOS != "windows" {
+		loose := write(t, `{"dir":"x"}`, 0o600)
+		if err := os.Chmod(loose, 0o666); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(loose); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("world writable config accepted: %v", err)
+		}
 	}
 	c, err = Load(write(t, `{"listen":":7443"}`, 0o644))
 	if err != nil || c.TimeoutDuration(3*time.Second) != 3*time.Second {

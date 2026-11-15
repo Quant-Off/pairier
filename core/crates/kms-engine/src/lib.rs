@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[cfg(all(windows, feature = "fips"))]
+compile_error!("the fips feature is not supported on windows targets");
+
 mod aead;
 mod alg;
 mod blob;

@@ -19,6 +19,7 @@ import (
 
 	"github.com/Quant-Off/pairier/host/internal/api"
 	"github.com/Quant-Off/pairier/host/internal/config"
+	"github.com/Quant-Off/pairier/host/internal/fsx"
 	"github.com/Quant-Off/pairier/host/internal/node"
 )
 
@@ -88,7 +89,7 @@ func run(args []string, stdout, stderr io.Writer, ready func(addr string)) int {
 	dir := fs.String("dir", "", "node directory (default $KMS_DIR)")
 	corePath := fs.String("core", "", "kms-core binary (default $KMS_CORE or next to kmsd)")
 	listen := fs.String("listen", "", "listen address host:port")
-	allowUnlocked := fs.Bool("allow-unlocked-memory", runtime.GOOS == "darwin", "run the core without locked memory")
+	allowUnlocked := fs.Bool("allow-unlocked-memory", runtime.GOOS == "darwin" || runtime.GOOS == "windows", "run the core without locked memory")
 	timeout := fs.Duration("timeout", defaultTimeout, "core call timeout")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
@@ -149,7 +150,7 @@ func run(args []string, stdout, stderr io.Writer, ready func(addr string)) int {
 	}
 	if s.node.CoreBinary == "" {
 		if exe, err := os.Executable(); err == nil {
-			s.node.CoreBinary = filepath.Join(filepath.Dir(exe), "kms-core")
+			s.node.CoreBinary = filepath.Join(filepath.Dir(exe), "kms-core"+fsx.ExeSuffix)
 		}
 	}
 	if err := (&config.Config{Listen: s.listen}).Validate(); err != nil {
