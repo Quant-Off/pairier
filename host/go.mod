@@ -1,3 +1,3 @@
 module github.com/Quant-Off/pairier/host
 
-go 1.27.3
+go 1.27.4
