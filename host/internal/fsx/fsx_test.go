@@ -100,3 +100,38 @@ func TestLockRenameAndExecutable(t *testing.T) {
 		t.Fatalf("data executable: %v %v", fi, err)
 	}
 }
+
+func TestWriteNewIsPrivateAndExclusive(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.bin")
+	if err := WriteNew(out, []byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckPrivateFile(out); err != nil {
+		t.Fatalf("new file is not private: %v", err)
+	}
+	if err := WriteNew(out, []byte("other")); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("existing file overwritten: %v", err)
+	}
+	got, err := ReadFileLimited(out, 6)
+	if err != nil || string(got) != "secret" {
+		t.Fatalf("read back %q %v", got, err)
+	}
+	if _, err := ReadFileLimited(out, 5); err == nil {
+		t.Fatal("limit not enforced")
+	}
+	if _, err := ReadFileLimited(dir, 5); err == nil {
+		t.Fatal("directory read as a file")
+	}
+	target := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	if err := WriteNew(link, []byte("x")); err == nil {
+		t.Fatal("dangling symlink followed")
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("symlink target created: %v", err)
+	}
+}

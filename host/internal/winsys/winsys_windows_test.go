@@ -178,3 +178,17 @@ func TestNewFilesAreOwnedByCurrentUser(t *testing.T) {
 		t.Fatalf("new file owned by %s", s)
 	}
 }
+
+func TestConsoleRecordLayout(t *testing.T) {
+	if unsafe.Sizeof(InputRecord{}) != 20 || unsafe.Alignof(InputRecord{}) != 4 {
+		t.Fatalf("INPUT_RECORD layout %d %d", unsafe.Sizeof(InputRecord{}), unsafe.Alignof(InputRecord{}))
+	}
+	if unsafe.Sizeof(consoleScreenBufferInfo{}) != 22 {
+		t.Fatalf("CONSOLE_SCREEN_BUFFER_INFO size %d", unsafe.Sizeof(consoleScreenBufferInfo{}))
+	}
+	r := InputRecord{EventType: KeyEventType, Event: [4]uint32{1, 0x0026_0002, 0xac00_0048, 0x10}}
+	k := r.Key()
+	if !k.Down || k.Repeat != 2 || k.VirtualKey != 0x26 || k.Char != 0xac00 || k.ControlState != 0x10 {
+		t.Fatalf("%+v", k)
+	}
+}

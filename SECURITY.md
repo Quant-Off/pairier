@@ -128,6 +128,15 @@ Envelope layer:
 - The core rejects every operation outside the usage assigned to a key. On every use, the host checks stored metadata and public keys against the values the core recomputes from the blob.
 - Node start, key generation, encryption, decryption, member changes, sent and received envelopes, inbox decisions, card renewal and witness conflicts are written to the hash-chained audit log, and each entry is signed with the core's audit key.
 
+## Terminal UI
+
+- `kmsctl ui` calls the same node functions as the commands. It adds no storage format, protocol or network endpoint, and every action is audited as the matching command is.
+- Every string drawn on the screen goes through one sanitizer that replaces C0 and C1 control characters, DEL and Unicode format characters, including bidirectional overrides, with `?`. Labels, member ids, inbox senders, audit fields, error text from other nodes and core stderr therefore cannot emit terminal escape sequences. The UI itself writes only cursor, erase, colour and mode sequences; it sets no window title and never touches the clipboard.
+- `member add` requires the fingerprint to be typed or pasted from the out-of-band channel. The UI never derives it from the card.
+- Decrypted data is written only to a file that is created exclusively and privately, with an owner-only DACL on Windows, and is never drawn. Buffers holding plaintext are cleared after use, which is best effort in Go.
+- The node stays open for the session, so the core keeps the root key in memory until `--idle` expires or the UI exits. Core stderr is kept in a bounded in-memory log and never written to disk.
+- The terminal mode is restored on exit and on SIGINT, SIGTERM and SIGHUP. With `--offline` the UI offers no action that opens a network connection.
+
 ## Platform differences
 
 The host and the wire formats behave the same everywhere, so nodes on different platforms interoperate. What the core can enforce against the local system differs.

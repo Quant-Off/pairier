@@ -106,6 +106,26 @@ func OpenNoFollow(path string, flag int, perm fs.FileMode) (*os.File, error) {
 	return os.OpenFile(path, flag, perm)
 }
 
+func CreatePrivate(path string) (*os.File, error) {
+	if _, err := os.Lstat(path); err == nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: fs.ErrExist}
+	}
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	sa, free, err := winsys.PrivateAttributes("file")
+	if err != nil {
+		return nil, err
+	}
+	defer free()
+	h, err := syscall.CreateFile(name, syscall.GENERIC_WRITE, 0, sa, syscall.CREATE_NEW, syscall.FILE_ATTRIBUTE_NORMAL|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(h), path), nil
+}
+
 func Lock(f *os.File) error {
 	return winsys.Lock(syscall.Handle(f.Fd()))
 }

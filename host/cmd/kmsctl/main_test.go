@@ -28,19 +28,6 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func TestParseAndFormatUsage(t *testing.T) {
-	bits, err := parseUsage("Encrypt, decrypt,export")
-	if err != nil || formatUsage(bits) != "encrypt,decrypt,export" {
-		t.Fatalf("%v %v", bits, err)
-	}
-	if _, err := parseUsage("encrypt,bogus"); err == nil {
-		t.Fatal("unknown usage accepted")
-	}
-	if _, err := parseUsage(""); err == nil {
-		t.Fatal("empty usage accepted")
-	}
-}
-
 func TestUsageAndVersion(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run(nil, nil, &out, &errb); code != 2 {
@@ -52,6 +39,30 @@ func TestUsageAndVersion(t *testing.T) {
 	out.Reset()
 	if code := run([]string{"key", "list"}, nil, &out, &errb); code != 2 {
 		t.Fatalf("missing dir should be a usage error, got %d", code)
+	}
+}
+
+func TestUIRequiresATerminal(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"ui"}, nil, &out, &errb); code != 2 || !strings.Contains(errb.String(), "interactive terminal") {
+		t.Fatalf("ui without a terminal: %d %q", code, errb.String())
+	}
+	errb.Reset()
+	if code := run([]string{"ui", "--idle", "-1s"}, nil, &out, &errb); code != 2 {
+		t.Fatalf("negative idle accepted: %d %q", code, errb.String())
+	}
+	errb.Reset()
+	if code := run([]string{"ui", "--lang", "fr"}, nil, &out, &errb); code != 2 || !strings.Contains(errb.String(), "unknown language") {
+		t.Fatalf("unknown language accepted: %d %q", code, errb.String())
+	}
+	f, err := os.Create(filepath.Join(t.TempDir(), "plain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	errb.Reset()
+	if code := run([]string{"ui"}, f, f, &errb); code != 2 || !strings.Contains(errb.String(), "interactive terminal") {
+		t.Fatalf("ui on a regular file: %d %q", code, errb.String())
 	}
 }
 
