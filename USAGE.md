@@ -53,6 +53,23 @@ $ kmsctl version
 kmsctl 1.1.0 (go go1.27.4, go_fips=true)
 ```
 
+### Go toolchain
+
+The `Makefile` exports `GOTOOLCHAIN=local` and `GOPROXY=off`, so `make` only uses the `go` on your `PATH` and never downloads anything. When that `go` is older than the version in `host/go.mod`, the build stops with `go: go.mod requires go >= 1.27.4 (running go 1.27.2; GOTOOLCHAIN=local)`. This happens when `go.mod` was raised, for example for a security fix, before your installed Go was updated.
+
+- The preferred fix is to update Go to the version in `host/go.mod` (`brew upgrade go`, the official installer or your package manager).
+- If you cannot update right away, download the toolchain once and pass it on the `make` command line. A variable on the `make` command line overrides the `Makefile`; the same variable set in the environment does not.
+
+```bash
+$ GOTOOLCHAIN=go1.27.4 go version   # once: fetched from the module proxy and checked against the Go checksum database
+$ make build GOTOOLCHAIN=go1.27.4
+$ make test GOTOOLCHAIN=go1.27.4
+```
+
+- The first line needs network access because `make` cannot download with `GOPROXY=off`. After that the toolchain is in the module cache and builds work offline. On an air-gapped host, install a verified Go release of the required version instead.
+- Running `go` directly in `host/` without `make` uses the default `GOTOOLCHAIN=auto`, so Go downloads and switches to the required version by itself. Set `GOTOOLCHAIN=local` to forbid that, as CI does.
+- `kmsctl version` shows which Go built the binary.
+
 ## Installation
 
 Release tarballs are provided for Linux amd64 and arm64 and require glibc 2.38 or later, such as Ubuntu 24.04 or Debian 13. `kmsd` and `kmsctl` are static binaries, and `kms-core` links glibc dynamically. Windows x86_64 and ARM64 are provided as zip archives (`pairier-1.1.0-windows-amd64.zip`, `pairier-1.1.0-windows-arm64.zip`) built in CI; their core is non-FIPS. No macOS binaries are provided, so build from source for development (see [Build](#build)).
@@ -258,7 +275,7 @@ Global options may appear before or after the command. `kmsctl --dir X key list`
 | `encrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | Encrypts. Reads stdin when no input is given.                                                                                                                                    |
 | `decrypt --id KEYID [--in FILE] [--out FILE] [--aad STR]`                            | Decrypts.                                                                                                                                                                        |
 | `audit verify [--anchor SEQ:HASH]... [--anchor-file FILE] [--peer MEMBER --url URL]` | Verifies the audit log chain and every checkpoint signature, and prints the head. Also checks that every given head (`--anchor`, `--anchor-file`, `--peer`) is still in the log. |
-| `ui [--offline] [--idle DUR]`                                                        | Opens the terminal UI described below.                                                                                                                                           |
+| `ui [--offline] [--idle DUR] [--lang LANG]`                                          | Opens the terminal UI described below.                                                                                                                                           |
 | `version`                                                                            | Prints the version and the Go FIPS status.                                                                                                                                       |
 
 If the file given with `--out` already exists, the command fails instead of overwriting it, and new files are created with `0600` permissions, on Windows with a DACL that allows only you and SYSTEM. Exit codes are as follows.
@@ -281,10 +298,11 @@ PS> .\kmsctl.exe --dir "$env:LOCALAPPDATA\pairier\bob" ui
 
 Without `--dir` or `$KMS_DIR` it asks for the node directory (default `~/.pairier`, on Windows `%LOCALAPPDATA%\pairier`), and when the directory does not exist it offers to initialize a node there.
 
-| Option       | Default | Description                                                                                           |
-|--------------|---------|-------------------------------------------------------------------------------------------------------|
-| `--offline`  | off     | Hides every action that contacts another node (push, health, peer audit). Use it on air-gapped hosts. |
-| `--idle DUR` | `10m`   | Closes the node and stops the core after this long without input. `0` keeps it open.                  |
+| Option        | Default | Description                                                                                                                                             |
+|---------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--offline`   | off     | Hides every action that contacts another node (push, health, peer audit). Use it on air-gapped hosts.                                                   |
+| `--idle DUR`  | `10m`   | Closes the node and stops the core after this long without input. `0` keeps it open.                                                                    |
+| `--lang LANG` | `auto`  | UI language, `en` or `ko`. `auto` picks Korean when `LC_ALL`, `LC_MESSAGES` or `LANG` starts with `ko`, or when the Windows display language is Korean. |
 
 The global options (`--dir`, `--core`, `--timeout`, `--allow-unlocked-memory`) apply as usual.
 
@@ -307,6 +325,7 @@ The UI behaves differently from a shell session in a few places.
 - Labels, member ids, error messages from other nodes and core output are drawn with control and bidirectional formatting characters replaced by `?`, so none of them can inject terminal escape sequences. The UI sets no window title and does not use the clipboard.
 - The node is opened once per session and the lists refresh every 15 seconds, so envelopes that `kmsd` receives appear without a restart. `kmsd` can keep running on the same directory.
 - When `--idle` expires the node is closed, the core process exits and the screen is cleared. `Enter` opens the node again.
+- In Korean the screens, forms and dialogs are translated. Messages from the node, the core and other nodes stay in English so that they match the troubleshooting table. Shortcuts also work while the Korean input method is on: the Dubeolsik jamo are read as the Latin keys in the same position, so `ㅂ` acts as `q`.
 
 It needs an interactive terminal on both standard input and output, at least 64 columns by 18 rows. On Linux and macOS any terminal that understands xterm sequences works, but not `TERM=dumb`. On Windows use Windows Terminal, or PowerShell or cmd in the console of Windows 10 1809 or later. The mintty window of Git Bash is not a console, so start the UI from Windows Terminal or through `winpty`. On Windows the UI is experimental like the rest of the Windows support.
 
@@ -499,3 +518,5 @@ The directory that holds the socket must be owned by the core user or root. A di
 | `ui: term: standard input and output must be an interactive terminal`            | Input or output is redirected, or the shell has no console, such as Git Bash in mintty. Run it directly in a terminal; on Windows use Windows Terminal, PowerShell or cmd, or `winpty kmsctl ui`. |
 | `ui: term: the console does not support virtual terminal sequences`              | The Windows console is older than Windows 10 1809. Use Windows Terminal or a newer Windows.                                                                                     |
 | `terminal too small`                                                             | The window is smaller than 64 columns by 18 rows. Enlarge it; the UI redraws on its own.                                                                                        |
+| `go: go.mod requires go >= 1.27.4 (running go 1.27.2; GOTOOLCHAIN=local)`        | The installed Go is older than `host/go.mod`. Update Go, or see [Go toolchain](#go-toolchain).                                                                                  |
+| `go: download go1.27.4 for ...: toolchain not available`                         | The toolchain is not in the module cache, and `make` cannot download it with `GOPROXY=off`. Run `GOTOOLCHAIN=go1.27.4 go version` once with network access.                     |
