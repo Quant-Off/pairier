@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -158,6 +159,7 @@ func (l *List) Clamp(n, h int) {
 }
 
 func (l *List) Handle(ev Event, n, h int) bool {
+	ev = Shortcut(ev)
 	switch {
 	case ev.Is(KeyUp), ev.IsRune('k'):
 		l.Sel--
@@ -297,6 +299,7 @@ type Form struct {
 	Fields []*Field
 	Focus  int
 	Err    string
+	T      *Texts
 }
 
 func (f *Form) Handle(ev Event) Result {
@@ -323,6 +326,7 @@ func (f *Form) Handle(ev Event) Result {
 }
 
 func (f *Form) Draw(s *Screen, base Style) {
+	tx := textsOr(f.T)
 	w := min(s.W-4, 78)
 	labelW := 0
 	for _, fl := range f.Fields {
@@ -371,13 +375,13 @@ func (f *Form) Draw(s *Screen, base Style) {
 		case FieldText:
 			fl.Input.Draw(s, valueX, row, valueW, vst, i == f.Focus)
 		case FieldToggle:
-			mark := "[ ] no"
+			mark := tx.No
 			if fl.On {
-				mark = "[x] yes"
+				mark = tx.Yes
 			}
 			s.Field(valueX, row, valueW, mark, vst)
 		case FieldChoice:
-			v := "(none)"
+			v := tx.None
 			if len(fl.Options) > 0 {
 				v = "< " + fl.Value() + " >"
 			}
@@ -416,7 +420,7 @@ func (f *Form) Draw(s *Screen, base Style) {
 		s.Field(x+2, row, w-4, line, Style{Fg: Red, Bold: true})
 		row++
 	}
-	s.Field(x+2, y+h-1, w-4, " Tab move  Space toggle  Enter next  Esc cancel ", base)
+	s.Field(x+2, y+h-1, w-4, tx.FormHint, base)
 }
 
 type Dialog struct {
@@ -428,6 +432,7 @@ type Dialog struct {
 	Err     string
 	Danger  bool
 	Off     int
+	T       *Texts
 }
 
 func (d *Dialog) Handle(ev Event) Result {
@@ -445,6 +450,9 @@ func (d *Dialog) Handle(ev Event) Result {
 		d.Off += 5
 		return None
 	}
+	if d.Confirm == "" {
+		ev = Shortcut(ev)
+	}
 	if !d.Ask {
 		if ev.Is(KeyEnter) || ev.Is(KeyEsc) || ev.IsRune('q') || ev.IsRune(' ') {
 			return Cancel
@@ -459,7 +467,7 @@ func (d *Dialog) Handle(ev Event) Result {
 			if d.Input.Value() == d.Confirm {
 				return Submit
 			}
-			d.Err = "the text does not match"
+			d.Err = textsOr(d.T).Mismatch
 			return None
 		}
 		d.Input.Handle(ev)
@@ -475,6 +483,7 @@ func (d *Dialog) Handle(ev Event) Result {
 }
 
 func (d *Dialog) Draw(s *Screen, base Style) {
+	tx := textsOr(d.T)
 	w := min(s.W-4, 78)
 	var lines []string
 	for _, l := range d.Lines {
@@ -509,7 +518,7 @@ func (d *Dialog) Draw(s *Screen, base Style) {
 	}
 	if d.Ask && d.Confirm != "" && row+1 < y+h-1 {
 		row++
-		label := "type " + d.Confirm + ": "
+		label := fmt.Sprintf(tx.Type, d.Confirm)
 		n := s.Put(x+2, row, label, Style{Bold: true})
 		d.Input.Draw(s, x+2+n, row, w-4-n, Style{Reverse: true}, true)
 		row++
@@ -517,15 +526,15 @@ func (d *Dialog) Draw(s *Screen, base Style) {
 	if d.Err != "" && row < y+h-1 {
 		s.Field(x+2, row, w-4, d.Err, Style{Fg: Red, Bold: true})
 	}
-	hint := " Enter/Esc close "
+	hint := tx.Close
 	if d.Ask {
-		hint = " y confirm  n/Esc cancel "
+		hint = tx.Confirm
 		if d.Confirm != "" {
-			hint = " Enter confirm  Esc cancel "
+			hint = tx.ConfirmTyped
 		}
 	}
 	if more {
-		hint += " Up/Down more "
+		hint += tx.More
 	}
 	s.Field(x+2, y+h-1, w-4, hint, st)
 }

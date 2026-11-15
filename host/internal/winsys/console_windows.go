@@ -83,3 +83,8 @@ func ReadConsoleInput(h syscall.Handle, recs []InputRecord) (int, error) {
 	}
 	return int(n), nil
 }
+
+func UserUILanguage() uint16 {
+	r, _, _ := procGetUserDefaultUILanguage.Call()
+	return uint16(r)
+}

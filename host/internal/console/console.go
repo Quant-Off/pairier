@@ -38,6 +38,7 @@ type Options struct {
 	Version string
 	Color   bool
 	Paste   bool
+	Lang    string
 
 	afterDraw func(s *tui.Screen, handled int)
 	now       func() time.Time
@@ -121,6 +122,8 @@ type app struct {
 	frame     int
 	handled   int
 	quit      bool
+	catalog   map[string]string
+	texts     *tui.Texts
 }
 
 func Run(ctx context.Context, t Terminal, o Options) (err error) {
@@ -142,6 +145,9 @@ func Run(ctx context.Context, t Terminal, o Options) (err error) {
 	}
 	a.screen = tui.NewScreen(w, h)
 	a.rend.Paste = o.Paste
+	if o.Lang == LangKorean {
+		a.catalog, a.texts = korean, &koreanTexts
+	}
 	if err := a.rend.Begin(); err != nil {
 		return err
 	}
@@ -214,7 +220,7 @@ func (a *app) spawn(title string, quiet bool, body func(ctx context.Context, res
 			a.next = &pending{title: title, body: body}
 			return true
 		}
-		a.flash("busy with "+a.job.title, true)
+		a.flash(a.tf("busy with %s", a.job.title), true)
 		return false
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, jobTimeout)
@@ -243,8 +249,8 @@ func (a *app) finish(res result) {
 	defer a.afterJob()
 	if res.err != nil {
 		if errors.Is(res.err, context.Canceled) {
-			a.flash(res.title+" cancelled", true)
-			a.logs.add(res.title + ": cancelled")
+			a.flash(a.tf("%s cancelled", res.title), true)
+			a.logs.add(a.tf("%s cancelled", res.title))
 			if a.phase == phaseOpening {
 				a.phase = phaseStart
 			}
@@ -254,9 +260,9 @@ func (a *app) finish(res result) {
 		if a.phase == phaseOpening {
 			a.phase = phaseStart
 		}
-		a.flash(res.title+" failed: "+res.err.Error(), true)
+		a.flash(a.tf("%s failed: %s", res.title, res.err.Error()), true)
 		if !res.quiet {
-			a.notify(res.title+" failed", []string{res.err.Error()}, true)
+			a.notify(a.tf("%s failed", res.title), []string{res.err.Error()}, true)
 		}
 		return
 	}
@@ -312,8 +318,8 @@ func (a *app) lock() {
 	a.modal = nil
 	a.phase = phaseLocked
 	a.rend.Invalidate()
-	a.logs.add(fmt.Sprintf("node closed after %s without input", a.opts.Idle))
-	a.flash("node closed after inactivity", false)
+	a.logs.add(a.tf("node closed after %s without input", a.opts.Idle))
+	a.flash(a.t("node closed after inactivity"), false)
 }
 
 func (a *app) handle(ev tui.Event) {
@@ -336,6 +342,7 @@ func (a *app) handle(ev tui.Event) {
 		a.modal.handle(a, ev)
 		return
 	}
+	ev = tui.Shortcut(ev)
 	if ev.Is(tui.KeyEsc) && a.job != nil {
 		a.job.cancel()
 		return
@@ -429,8 +436,8 @@ func (a *app) draw() {
 	s := a.screen
 	s.Clear()
 	if s.W < minWidth || s.H < minHeight {
-		s.Put(0, 0, fmt.Sprintf("terminal too small (%dx%d), need %dx%d", s.W, s.H, minWidth, minHeight), bad)
-		s.Put(0, 1, "resize the window or press Ctrl+C to quit", plain)
+		s.Put(0, 0, a.tf("terminal too small (%dx%d), need %dx%d", s.W, s.H, minWidth, minHeight), bad)
+		s.Put(0, 1, a.t("resize the window or press Ctrl+C to quit"), plain)
 		_ = a.rend.Draw(s)
 		a.afterDraw()
 		return
@@ -441,11 +448,11 @@ func (a *app) draw() {
 	case phaseStart:
 		a.drawStart()
 	case phaseOpening:
-		s.Put(2, 3, "opening "+a.dir+" ...", body)
+		s.Put(2, 3, a.tf("opening %s ...", a.dir), body)
 	case phaseLocked:
-		s.Put(2, 3, "The node was closed after "+a.opts.Idle.String()+" without input.", bold)
-		s.Put(2, 4, "The core process has exited and its key material is gone from memory.", plain)
-		s.Put(2, 6, "Enter reopen   q quit", plain)
+		s.Put(2, 3, a.tf("The node was closed after %s without input.", a.opts.Idle), bold)
+		s.Put(2, 4, a.t("The core process has exited and its key material is gone from memory."), plain)
+		s.Put(2, 6, a.t("Enter reopen   q quit"), plain)
 	case phaseMain:
 		a.drawTabs()
 		a.drawTab()
@@ -469,14 +476,14 @@ func (a *app) drawHeader() {
 	s.Fill(0, 0, s.W, 1, reverse)
 	left := " pairier"
 	if a.info.member != "" {
-		left += "  member " + a.info.member
+		left += "  " + a.t("member") + " " + a.info.member
 	}
 	if a.dir != "" {
 		left += "  " + a.dir
 	}
 	right := "kmsctl " + a.opts.Version + " "
 	if a.opts.Offline {
-		right = "[offline]  " + right
+		right = a.t("[offline]") + "  " + right
 	}
 	rw := tui.StringWidth(right)
 	s.Field(0, 0, s.W-rw, left, reverse)
@@ -487,9 +494,9 @@ func (a *app) drawTabs() {
 	s := a.screen
 	x := 0
 	for i, name := range tabNames {
-		label := fmt.Sprintf(" %d %s ", i+1, name)
+		label := fmt.Sprintf(" %d %s ", i+1, a.t(name))
 		if i == tabInbox && len(a.data.inbox) > 0 {
-			label = fmt.Sprintf(" %d %s (%d) ", i+1, name, len(a.data.inbox))
+			label = fmt.Sprintf(" %d %s (%d) ", i+1, a.t(name), len(a.data.inbox))
 		}
 		st := plain
 		if i == a.tab {
@@ -501,13 +508,13 @@ func (a *app) drawTabs() {
 
 func (a *app) drawFooter() {
 	s := a.screen
-	right := "? help  q quit "
+	right := a.t("? help  q quit ")
 	if a.phase != phaseMain {
 		right = ""
 	}
 	left := a.hints()
 	if a.phase == phaseMain {
-		if more := "  Tab/1-6 tabs  / filter  Ctrl+R refresh"; tui.StringWidth(left+more+"  "+right) <= s.W {
+		if more := a.t("  Tab/1-6 tabs  / filter  Ctrl+R refresh"); tui.StringWidth(left+more+"  "+right) <= s.W {
 			left += more
 		}
 	}
@@ -516,7 +523,7 @@ func (a *app) drawFooter() {
 	s.Put(s.W-rw, s.H-2, right, dim)
 	switch {
 	case a.job != nil:
-		s.Field(0, s.H-1, s.W, fmt.Sprintf(" %c %s ... (Esc cancels)", spinner[a.frame%len(spinner)], a.job.title), warn)
+		s.Field(0, s.H-1, s.W, fmt.Sprintf(" %c %s", spinner[a.frame%len(spinner)], a.job.title)+a.t(" ... (Esc cancels)"), warn)
 	case a.status != "":
 		st := good
 		if a.statusErr {
@@ -529,47 +536,47 @@ func (a *app) drawFooter() {
 func (a *app) hints() string {
 	switch a.phase {
 	case phaseStart:
-		return " o open a node directory   n initialize a new node   q quit"
+		return a.t(" o open a node directory   n initialize a new node   q quit")
 	case phaseLocked:
-		return " Enter reopen   q quit"
+		return a.t(" Enter reopen   q quit")
 	case phaseOpening:
-		return " Esc cancel   q quit"
+		return a.t(" Esc cancel   q quit")
 	}
 	net := !a.opts.Offline
 	switch a.tab {
 	case tabNode:
-		return " c export card  R renew card"
+		return a.t(" c export card  R renew card")
 	case tabKeys:
-		h := " n new  s send"
+		h := a.t(" n new  s send")
 		if net {
-			h += "  p push"
+			h += a.t("  p push")
 		}
-		return h + "  r receive  e/d encrypt/decrypt  Enter info"
+		return h + a.t("  r receive  e/d encrypt/decrypt  Enter info")
 	case tabMembers:
-		h := " a add  w witness heads"
+		h := a.t(" a add  w witness heads")
 		if net {
-			h += "  h health"
+			h += a.t("  h health")
 		}
 		return h
 	case tabInbox:
-		return " Enter accept  x reject  i import file"
+		return a.t(" Enter accept  x reject  i import file")
 	case tabAudit:
-		return " v verify"
+		return a.t(" v verify")
 	}
-	return " Up/Down scroll"
+	return a.t(" Up/Down scroll")
 }
 
 func (a *app) drawStart() {
 	s := a.screen
 	lines := []string{
-		"No node is open.",
+		a.t("No node is open."),
 		"",
-		"o  open an existing node directory",
-		"n  initialize a new node",
-		"q  quit",
+		a.t("o  open an existing node directory"),
+		a.t("n  initialize a new node"),
+		a.t("q  quit"),
 		"",
-		"Every action runs through the same node code as the kmsctl commands",
-		"and is written to the node audit log.",
+		a.t("Every action runs through the same node code as the kmsctl commands"),
+		a.t("and is written to the node audit log."),
 	}
 	for i, l := range lines {
 		s.Put(2, 3+i, l, plain)

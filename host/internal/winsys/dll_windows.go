@@ -21,6 +21,7 @@ var (
 	procSetConsoleMode              = kernel32.NewProc("SetConsoleMode")
 	procGetConsoleScreenBufferInfo  = kernel32.NewProc("GetConsoleScreenBufferInfo")
 	procReadConsoleInputW           = kernel32.NewProc("ReadConsoleInputW")
+	procGetUserDefaultUILanguage    = kernel32.NewProc("GetUserDefaultUILanguage")
 	procGetNamedSecurityInfoW       = advapi32.NewProc("GetNamedSecurityInfoW")
 	procSetNamedSecurityInfoW       = advapi32.NewProc("SetNamedSecurityInfoW")
 	procConvertStringSDToSD         = advapi32.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW")

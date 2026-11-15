@@ -48,7 +48,7 @@ commands:
   audit verify [--anchor SEQ:HASH]... [--anchor-file FILE] [--peer MEMBER --url https://HOST:PORT]
   encrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   decrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
-  ui [--offline] [--idle DURATION]
+  ui [--offline] [--idle DURATION] [--lang auto|en|ko]
   version
 `
 
@@ -218,8 +218,13 @@ func (c *cli) cmdUI(ctx context.Context, args []string) (int, error) {
 	fs := c.flags("ui")
 	offline := fs.Bool("offline", false, "hide actions that contact other nodes (push, health, peer audit)")
 	idle := fs.Duration("idle", 10*time.Minute, "close the node after this long without input, 0 keeps it open")
+	langFlag := fs.String("lang", "auto", "ui language: auto, en or ko")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *idle < 0 {
-		return 2, errors.New("ui: usage: ui [--offline] [--idle DURATION]")
+		return 2, errors.New("ui: usage: ui [--offline] [--idle DURATION] [--lang auto|en|ko]")
+	}
+	lang, err := console.Language(*langFlag)
+	if err != nil {
+		return 2, fmt.Errorf("ui: %w", err)
 	}
 	if runtime.GOOS != "windows" && os.Getenv("TERM") == "dumb" {
 		return 2, errors.New("ui: TERM=dumb cannot show the terminal ui, use the commands instead")
@@ -248,6 +253,7 @@ func (c *cli) cmdUI(ctx context.Context, args []string) (int, error) {
 		Version: version,
 		Color:   os.Getenv("NO_COLOR") == "",
 		Paste:   runtime.GOOS != "windows",
+		Lang:    lang,
 	})
 	if err != nil {
 		return 1, err

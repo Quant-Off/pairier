@@ -200,7 +200,7 @@ func (a *app) table(tab int) ([]column, []row) {
 	var rows []row
 	switch tab {
 	case tabKeys:
-		cols = []column{{"KEY ID", 16}, {"ALG", 17}, {"USAGE", 0}, {"LABEL", 0}, {"FROM", 12}}
+		cols = []column{{a.t("KEY ID"), 16}, {a.t("ALG"), 17}, {a.t("USAGE"), 0}, {a.t("LABEL"), 0}, {a.t("FROM"), 12}}
 		keys := slices.Clone(a.data.keys)
 		slices.SortStableFunc(keys, func(x, y *store.KeyRecord) int {
 			switch ix, iy := internalKey(x), internalKey(y); {
@@ -212,7 +212,7 @@ func (a *app) table(tab int) ([]column, []row) {
 			return 1
 		})
 		for _, k := range keys {
-			origin := "local"
+			origin := a.t("local")
 			if k.Origin != nil {
 				origin = k.Origin.Sender
 			}
@@ -223,19 +223,19 @@ func (a *app) table(tab int) ([]column, []row) {
 			rows = append(rows, row{id: k.KeyID, cols: []string{k.KeyID[:min(16, len(k.KeyID))], wire.AlgName(k.Alg), wire.FormatUsage(k.Usage), k.Label, origin}, st: st})
 		}
 	case tabMembers:
-		cols = []column{{"MEMBER", 16}, {"IDENTITY", 17}, {"KEM", 22}, {"FINGERPRINT", 0}}
+		cols = []column{{a.t("MEMBER"), 16}, {a.t("IDENTITY"), 17}, {a.t("KEM"), 22}, {a.t("FINGERPRINT"), 0}}
 		for _, m := range a.data.members {
 			st := plain
 			ident, kem := wire.AlgName(m.identityAlg), wire.AlgName(m.kemAlg)
 			if m.err != "" {
-				st, ident, kem = bad, "error", "error"
+				st, ident, kem = bad, a.t("error"), a.t("error")
 			} else if m.retired {
 				st = warn
 			}
 			rows = append(rows, row{id: m.id, cols: []string{m.id, ident, kem, m.fingerprint}, st: st})
 		}
 	case tabInbox:
-		cols = []column{{"ENVELOPE", 16}, {"FROM", 16}, {"SENT", 20}, {"RECEIVED", 0}}
+		cols = []column{{a.t("ENVELOPE"), 16}, {a.t("FROM"), 16}, {a.t("SENT"), 20}, {a.t("RECEIVED"), 0}}
 		for _, it := range a.data.inbox {
 			st := plain
 			if a.memberRecord(it.Sender) == nil {
@@ -244,7 +244,7 @@ func (a *app) table(tab int) ([]column, []row) {
 			rows = append(rows, row{id: it.ID, cols: []string{it.ID[:min(16, len(it.ID))], it.Sender, stamp(it.SentAt), stamp(it.ReceivedAt)}, st: st})
 		}
 	case tabAudit:
-		cols = []column{{"SEQ", 7}, {"TIME", 20}, {"EVENT", 18}, {"FIELDS", 0}}
+		cols = []column{{a.t("SEQ"), 7}, {a.t("TIME"), 20}, {a.t("EVENT"), 18}, {a.t("FIELDS"), 0}}
 		for i := len(a.data.entries) - 1; i >= 0; i-- {
 			e := a.data.entries[i]
 			st := plain
@@ -254,7 +254,7 @@ func (a *app) table(tab int) ([]column, []row) {
 			rows = append(rows, row{id: fmt.Sprint(e.Seq), cols: []string{fmt.Sprint(e.Seq), stamp(e.Time), e.Event, fieldText(e.Fields)}, st: st})
 		}
 	case tabLog:
-		cols = []column{{"SESSION LOG (memory only)", 0}}
+		cols = []column{{a.t("SESSION LOG (memory only)"), 0}}
 		lines := a.logs.snapshot()
 		for i, l := range lines {
 			rows = append(rows, row{id: fmt.Sprint(i), cols: []string{l}, st: plain})
@@ -367,13 +367,13 @@ func (a *app) drawTable(tab int) int {
 		}
 	}
 	if len(rows) == 0 {
-		msg := "(empty)"
+		msg := a.t("(empty)")
 		if a.filter[tab] != "" {
-			msg = "(nothing matches the filter " + a.filter[tab] + ", Esc clears it)"
+			msg = a.tf("(nothing matches the filter %s, Esc clears it)", a.filter[tab])
 		}
 		s.Put(2, top+1, msg, dim)
 	} else if a.filter[tab] != "" {
-		s.Field(s.W-30, top, 29, "filter: "+a.filter[tab], warn)
+		s.Field(s.W-30, top, 29, a.tf("filter: %s", a.filter[tab]), warn)
 	}
 	return sel
 }
@@ -408,11 +408,12 @@ func (a *app) drawTab() {
 			_, rows := a.table(tabKeys)
 			k := a.keyByID(rows[sel].id)
 			if k != nil {
-				origin := "generated on this node"
+				origin := a.t("generated on this node")
 				if k.Origin != nil {
-					origin = "from " + k.Origin.Sender + " sent " + stamp(k.Origin.SentAt)
+					origin = a.tf("from %s sent %s", k.Origin.Sender, stamp(k.Origin.SentAt))
 				}
-				a.detail("id      "+k.KeyID+"   "+wire.AlgName(k.Alg), "label   "+k.Label, "usage   "+wire.FormatUsage(k.Usage)+"   created "+stamp(k.CreatedAt), "origin  "+origin)
+				a.detail(a.dkv("id", k.KeyID+"   "+wire.AlgName(k.Alg)), a.dkv("label", k.Label),
+					a.dkv("usage", wire.FormatUsage(k.Usage)+"   "+a.t("created")+" "+stamp(k.CreatedAt)), a.dkv("origin", origin))
 			}
 		}
 	case tabMembers:
@@ -420,20 +421,21 @@ func (a *app) drawTab() {
 			_, rows := a.table(tabMembers)
 			if m := a.memberRecord(rows[sel].id); m != nil {
 				fp := splitFingerprint(m.fingerprint)
-				lines := []string{"member  " + m.id + "   fingerprint " + fp[0]}
+				prefix := a.dkv("member", m.id+"   "+a.t("fingerprint")+" ")
+				lines := []string{prefix + fp[0]}
 				if len(fp) > 1 {
-					lines = append(lines, "        "+strings.Repeat(" ", len(m.id)+15)+fp[1])
+					lines = append(lines, strings.Repeat(" ", tui.StringWidth(prefix))+fp[1])
 				}
-				heads := fmt.Sprintf("witnessed audit heads %d", len(m.heads))
+				heads := a.tf("witnessed audit heads %d", len(m.heads))
 				if len(m.heads) > 0 {
-					heads += ", latest " + m.heads[len(m.heads)-1].String()
+					heads += a.tf(", latest %s", m.heads[len(m.heads)-1].String())
 				}
 				lines = append(lines, heads)
 				switch {
 				case m.err != "":
-					lines = append(lines, "error   "+m.err)
+					lines = append(lines, a.dkv("error", m.err))
 				case m.retired:
-					lines = append(lines, "warning the card uses a retired kem, ask the member to run card renew")
+					lines = append(lines, a.t("warning the card uses a retired kem, ask the member to run card renew"))
 				}
 				a.detail(lines...)
 			}
@@ -442,13 +444,14 @@ func (a *app) drawTab() {
 		if sel := a.drawTable(tabInbox); sel >= 0 {
 			_, rows := a.table(tabInbox)
 			if it := a.inboxByID(rows[sel].id); it != nil {
-				from := "from    " + it.Sender
+				from := a.dkv("from", it.Sender)
 				if m := a.memberRecord(it.Sender); m != nil {
-					from += "   fingerprint " + m.fingerprint
+					from += "   " + a.t("fingerprint") + " " + m.fingerprint
 				} else {
-					from += "   not a registered member"
+					from += "   " + a.t("not a registered member")
 				}
-				a.detail("envelope "+it.ID, from, "sent    "+stamp(it.SentAt)+"   received "+stamp(it.ReceivedAt), "Enter verifies and imports the key, x deletes the envelope")
+				a.detail(a.dkv("envelope", it.ID), from, a.dkv("sent", stamp(it.SentAt)+"   "+a.t("received")+" "+stamp(it.ReceivedAt)),
+					a.t("Enter verifies and imports the key, x deletes the envelope"))
 			}
 		}
 	case tabAudit:
@@ -467,39 +470,39 @@ func (a *app) drawNode() {
 		s.Field(16, y, s.W-18, value, st)
 		y++
 	}
-	put("Member", i.member, plain)
-	put("Directory", a.dir, plain)
+	put(a.t("Member"), i.member, plain)
+	put(a.t("Directory"), a.dir, plain)
 	for n, part := range splitFingerprint(i.fingerprint) {
 		label := ""
 		if n == 0 {
-			label = "Fingerprint"
+			label = a.t("Fingerprint")
 		}
 		put(label, part, heading)
 	}
-	put("Identity", wire.AlgName(i.identityAlg), plain)
+	put(a.t("Identity"), wire.AlgName(i.identityAlg), plain)
 	kem := wire.AlgName(i.kemAlg)
 	kemStyle := plain
 	if i.retiredKEM {
-		kem += "  retired, press R to renew the card"
+		kem += a.t("  retired, press R to renew the card")
 		kemStyle = warn
 	}
-	put("KEM", kem, kemStyle)
-	tlsText, tlsStyle := "held in the core", plain
+	put(a.t("KEM"), kem, kemStyle)
+	tlsText, tlsStyle := a.t("held in the core"), plain
 	if i.legacyTLS {
-		tlsText, tlsStyle = "stored outside the core, press R to renew the card", warn
+		tlsText, tlsStyle = a.t("stored outside the core, press R to renew the card"), warn
 	}
-	put("TLS key", tlsText, tlsStyle)
-	put("Core", fmt.Sprintf("%s   fips=%v   pqc=%v", i.engine, i.coreFIPS, i.pqc), plain)
-	put("Host", fmt.Sprintf("kmsctl %s   %s   go_fips=%v", a.opts.Version, runtime.Version(), fips140.Enabled()), plain)
-	put("Audit log", i.auditPath, plain)
-	put("Store", fmt.Sprintf("%d keys, %d members, %d pending envelopes", len(a.data.keys), len(a.data.members), len(a.data.inbox)), plain)
-	net := "network actions enabled (push, health, peer audit), each needs an https URL"
+	put(a.t("TLS key"), tlsText, tlsStyle)
+	put(a.t("Core"), fmt.Sprintf("%s   fips=%v   pqc=%v", i.engine, i.coreFIPS, i.pqc), plain)
+	put(a.t("Host"), fmt.Sprintf("kmsctl %s   %s   go_fips=%v", a.opts.Version, runtime.Version(), fips140.Enabled()), plain)
+	put(a.t("Audit log"), i.auditPath, plain)
+	put(a.t("Store"), a.tf("%d keys, %d members, %d pending envelopes", len(a.data.keys), len(a.data.members), len(a.data.inbox)), plain)
+	net := a.t("network actions enabled (push, health, peer audit), each needs an https URL")
 	if a.opts.Offline {
-		net = "offline, actions that contact other nodes are hidden"
+		net = a.t("offline, actions that contact other nodes are hidden")
 	}
-	put("Mode", net, plain)
+	put(a.t("Mode"), net, plain)
 	if a.opts.Idle > 0 {
-		put("Idle close", a.opts.Idle.String(), plain)
+		put(a.t("Idle close"), a.opts.Idle.String(), plain)
 	}
 }
 
@@ -508,26 +511,26 @@ func (a *app) drawAudit() {
 	v := a.verify
 	switch {
 	case v == nil:
-		s.Field(1, 3, s.W-2, "Not verified in this session. Press v to verify the chain, anchors and witnessed heads.", plain)
+		s.Field(1, 3, s.W-2, a.t("Not verified in this session. Press v to verify the chain, anchors and witnessed heads."), plain)
 	case v.err != "":
-		s.Field(1, 3, s.W-2, "Verification FAILED at "+v.at.UTC().Format(time.RFC3339), bad)
+		s.Field(1, 3, s.W-2, a.tf("Verification FAILED at %s", v.at.UTC().Format(time.RFC3339)), bad)
 		s.Field(1, 4, s.W-2, v.err, bad)
 	default:
 		peer := ""
 		if v.peer != "" {
-			peer = ", heads witnessed by " + v.peer
+			peer = a.tf(", heads witnessed by %s", v.peer)
 		}
-		s.Field(1, 3, s.W-2, fmt.Sprintf("Verified %d entries against %d anchors%s at %s", v.count, v.anchors, peer, v.at.UTC().Format(time.RFC3339)), good)
-		s.Field(1, 4, s.W-2, "head "+v.head.String(), heading)
+		s.Field(1, 3, s.W-2, a.tf("Verified %d entries against %d anchors%s at %s", v.count, v.anchors, peer, v.at.UTC().Format(time.RFC3339)), good)
+		s.Field(1, 4, s.W-2, a.t("head")+" "+v.head.String(), heading)
 	}
 	if a.data.auditErr != "" {
-		s.Field(1, auditTop-1, s.W-2, "reading the log failed: "+a.data.auditErr, bad)
+		s.Field(1, auditTop-1, s.W-2, a.tf("reading the log failed: %s", a.data.auditErr), bad)
 	}
 	if sel := a.drawTable(tabAudit); sel >= 0 {
 		_, rows := a.table(tabAudit)
 		for _, e := range a.data.entries {
 			if fmt.Sprint(e.Seq) == rows[sel].id {
-				lines := []string{fmt.Sprintf("seq %d   %s   %s", e.Seq, stamp(e.Time), e.Event)}
+				lines := []string{a.tf("seq %d   %s   %s", e.Seq, stamp(e.Time), e.Event)}
 				lines = append(lines, tui.Wrap(fieldText(e.Fields), s.W-2)...)
 				a.detail(lines...)
 				break
@@ -627,26 +630,29 @@ func (a *app) askQuit() {
 		a.quit = true
 		return
 	}
-	a.confirm("Quit", []string{a.job.title + " is still running. Quit anyway? The operation is cancelled."}, "", false, func(a *app) { a.quit = true })
+	a.confirm(a.t("Quit"), []string{a.tf("%s is still running. Quit anyway? The operation is cancelled.", a.job.title)}, "", false, func(a *app) { a.quit = true })
 }
 
 func (a *app) help() {
 	lines := []string{
-		"Tab, Shift+Tab or 1-6 switch tabs. Up/Down or j/k move, PgUp/PgDn and Home/End jump.",
-		"/ filters the list, Esc clears the filter or cancels a running action, Ctrl+R refreshes, Ctrl+L redraws, q or Ctrl+C quits.",
+		a.t("Tab, Shift+Tab or 1-6 switch tabs. Up/Down or j/k move, PgUp/PgDn and Home/End jump."),
+		a.t("/ filters the list, Esc clears the filter or cancels a running action, Ctrl+R refreshes, Ctrl+L redraws, q or Ctrl+C quits."),
 		"",
-		"Node     c export card (card)   R renew card (card renew)",
-		"Keys     Enter info (key info)   n new (key gen)   s send to file (key send)   r receive file (key receive)",
-		"         e encrypt file (encrypt)   d decrypt file (decrypt)   p push to kmsd (key push)",
-		"Members  a add card (member add)   w export witnessed heads (member witness)   h health (peer health)",
-		"Inbox    Enter accept (inbox accept)   x reject (inbox reject)   i import envelope file (key receive)",
-		"Audit    v verify with anchors, an anchor file or a peer (audit verify)",
+		a.t("Node     c export card (card)   R renew card (card renew)"),
+		a.t("Keys     Enter info (key info)   n new (key gen)   s send to file (key send)   r receive file (key receive)"),
+		a.t("         e encrypt file (encrypt)   d decrypt file (decrypt)   p push to kmsd (key push)"),
+		a.t("Members  a add card (member add)   w export witnessed heads (member witness)   h health (peer health)"),
+		a.t("Inbox    Enter accept (inbox accept)   x reject (inbox reject)   i import envelope file (key receive)"),
+		a.t("Audit    v verify with anchors, an anchor file or a peer (audit verify)"),
 		"",
-		"Fingerprints are never filled in for you, type them from the other channel.",
-		"Decrypted data only goes to new files created for your user. Nothing is copied to the clipboard.",
+		a.t("Fingerprints are never filled in for you, type them from the other channel."),
+		a.t("Decrypted data only goes to new files created for your user. Nothing is copied to the clipboard."),
 	}
 	if a.opts.Offline {
-		lines = append(lines, "Offline mode hides push, health and peer audit.")
+		lines = append(lines, a.t("Offline mode hides push, health and peer audit."))
 	}
-	a.message("Help", lines, false)
+	if a.catalog != nil {
+		lines = append(lines, a.t("Shortcuts also work while the Korean input method is on."))
+	}
+	a.message(a.t("Help"), lines, false)
 }

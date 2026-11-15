@@ -51,6 +51,10 @@ func TestUIRequiresATerminal(t *testing.T) {
 	if code := run([]string{"ui", "--idle", "-1s"}, nil, &out, &errb); code != 2 {
 		t.Fatalf("negative idle accepted: %d %q", code, errb.String())
 	}
+	errb.Reset()
+	if code := run([]string{"ui", "--lang", "fr"}, nil, &out, &errb); code != 2 || !strings.Contains(errb.String(), "unknown language") {
+		t.Fatalf("unknown language accepted: %d %q", code, errb.String())
+	}
 	f, err := os.Create(filepath.Join(t.TempDir(), "plain"))
 	if err != nil {
 		t.Fatal(err)

@@ -3,10 +3,15 @@ package console
 import (
 	"bytes"
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -578,13 +583,14 @@ func TestStartScreenAndErrors(t *testing.T) {
 }
 
 func TestHelpersRejectBadInput(t *testing.T) {
-	if _, err := checkURL("http://host:1"); err == nil {
+	a := &app{}
+	if _, err := a.checkURL("http://host:1"); err == nil {
 		t.Fatal("http url accepted")
 	}
-	if _, err := checkURL("https://user@host:1"); err == nil {
+	if _, err := a.checkURL("https://user@host:1"); err == nil {
 		t.Fatal("url with credentials accepted")
 	}
-	if u, err := checkURL(" https://host:7443/ "); err != nil || u != "https://host:7443" {
+	if u, err := a.checkURL(" https://host:7443/ "); err != nil || u != "https://host:7443" {
 		t.Fatalf("%q %v", u, err)
 	}
 	if _, err := parseAnchors("1:zz"); err == nil {
@@ -594,10 +600,10 @@ func TestHelpersRejectBadInput(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 	dir := t.TempDir()
-	if _, err := inPath(dir); err == nil {
+	if _, err := a.inPath(dir); err == nil {
 		t.Fatal("directory accepted as input")
 	}
-	if _, err := outPath(dir); err == nil {
+	if _, err := a.outPath(dir); err == nil {
 		t.Fatal("existing path accepted as output")
 	}
 	var l logBuffer
@@ -642,5 +648,148 @@ func TestSmallTerminals(t *testing.T) {
 			t.Fatalf("%dx%d usage flags cut\n%s", size[0], size[1], s)
 		}
 		h.send(tui.KeyEvent(tui.KeyEsc))
+	}
+}
+
+func TestKoreanCatalogIsComplete(t *testing.T) {
+	fset := token.NewFileSet()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]bool{}
+	for _, name := range tabNames {
+		keys[name] = true
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "t", "tf", "kv", "dkv":
+			default:
+				return true
+			}
+			lit, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			v, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys[v] = true
+			return true
+		})
+	}
+	if len(keys) < 200 {
+		t.Fatalf("only %d translatable strings found, the scan is broken", len(keys))
+	}
+	verbs := regexp.MustCompile(`%(\[\d+\])?[a-zA-Z]`)
+	for k := range keys {
+		ko, ok := korean[k]
+		if !ok {
+			t.Errorf("no Korean text for %q", k)
+			continue
+		}
+		if len(verbs.FindAllString(k, -1)) != len(verbs.FindAllString(ko, -1)) {
+			t.Errorf("format verbs differ: %q -> %q", k, ko)
+		}
+	}
+	for k := range korean {
+		if !keys[k] {
+			t.Errorf("unused Korean text for %q", k)
+		}
+	}
+}
+
+func TestLanguageSelection(t *testing.T) {
+	for _, c := range []struct {
+		choice, all, messages, lang, want string
+	}{
+		{"auto", "ko_KR.UTF-8", "", "en_US.UTF-8", LangKorean},
+		{"auto", "", "ko_KR.UTF-8", "", LangKorean},
+		{"auto", "", "", "ko_KR.eucKR", LangKorean},
+		{"auto", "C", "", "ko_KR.UTF-8", LangEnglish},
+		{"auto", "", "", "en_US.UTF-8", LangEnglish},
+		{"", "", "", "ko", LangKorean},
+		{"en", "ko_KR.UTF-8", "", "", LangEnglish},
+		{"ko", "", "", "en_US.UTF-8", LangKorean},
+	} {
+		t.Setenv("LC_ALL", c.all)
+		t.Setenv("LC_MESSAGES", c.messages)
+		t.Setenv("LANG", c.lang)
+		if got, err := Language(c.choice); err != nil || got != c.want {
+			t.Errorf("%+v: got %q %v", c, got, err)
+		}
+	}
+	if _, err := Language("fr"); err == nil {
+		t.Fatal("unknown language accepted")
+	}
+}
+
+func TestKoreanUI(t *testing.T) {
+	bin := coreBin(t)
+	base := t.TempDir()
+	h := launch(t, Options{Node: nodeOpts(bin), Dir: filepath.Join(base, "gina"), Lang: LangKorean})
+	h.wait("노드 초기화")
+	h.enter()
+	h.typ("gina")
+	h.enter()
+	h.enter()
+	h.wait("노드를 초기화했습니다")
+	h.enter()
+	h.wait("1 노드")
+	for _, size := range [][2]int{{80, 24}, {64, 18}} {
+		h.send(tui.ResizeEvent(size[0], size[1]))
+		for tab := '1'; tab <= '6'; tab++ {
+			h.send(tui.RuneEvent(tab))
+			lines := strings.Split(h.text(), "\n")
+			if !strings.Contains(lines[1], "6 로그") || !strings.HasSuffix(lines[size[1]-2], "? 도움말  q 종료") {
+				t.Fatalf("%dx%d tab %c\n%s", size[0], size[1], tab, h.text())
+			}
+		}
+	}
+	h.send(tui.ResizeEvent(100, 30), tui.RuneEvent('2'), tui.RuneEvent('ㅜ'))
+	h.wait("키 생성")
+	if !strings.Contains(h.text(), "[x] export") || !strings.Contains(h.text(), "Esc 취소") {
+		t.Fatalf("Korean form\n%s", h.text())
+	}
+	h.typ("한글 키")
+	h.enter()
+	h.enter()
+	h.wait("한글 키")
+	h.idle()
+	h.send(tui.RuneEvent('?'))
+	h.wait("도움말")
+	for i := 0; i < 40; i++ {
+		h.send(tui.KeyEvent(tui.KeyDown))
+	}
+	h.wait("한글 입력 상태에서도")
+	h.send(tui.RuneEvent('ㅂ'))
+	h.wait("1 노드")
+	select {
+	case h.term.events <- tui.RuneEvent('ㅂ'):
+	case <-time.After(5 * time.Second):
+		t.Fatal("ui stopped reading input")
+	}
+	select {
+	case err := <-h.done:
+		h.done <- err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("q typed with the Korean input method did not quit\n%s", h.text())
 	}
 }

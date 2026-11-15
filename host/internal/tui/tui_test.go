@@ -405,3 +405,43 @@ func TestDialogScrollsLongContent(t *testing.T) {
 		t.Fatal("bracketed paste not requested")
 	}
 }
+
+func TestKoreanLayoutShortcutsAndTexts(t *testing.T) {
+	if Latin('ㅂ') != 'q' || Latin('ㄲ') != 'R' || Latin('가') != '가' || Latin('x') != 'x' {
+		t.Fatal("dubeolsik mapping")
+	}
+	if ev := Shortcut(RuneEvent('ㅛ')); ev != RuneEvent('y') {
+		t.Fatalf("%v", ev)
+	}
+	d := &Dialog{Ask: true}
+	if d.Handle(RuneEvent('ㅛ')) != Submit {
+		t.Fatal("y typed with the Korean input method did not confirm")
+	}
+	typed := &Dialog{Ask: true, Confirm: "alice"}
+	typed.Handle(RuneEvent('ㅁ'))
+	if typed.Input.Value() != "ㅁ" {
+		t.Fatalf("typed confirmation input was remapped: %q", typed.Input.Value())
+	}
+	var l List
+	l.Handle(RuneEvent('ㅓ'), 5, 3)
+	if l.Sel != 1 {
+		t.Fatal("j typed with the Korean input method did not move")
+	}
+	ko := Texts{FormHint: " 이동 ", Close: " 닫기 ", Confirm: " 확인 ", ConfirmTyped: " 입력 확인 ", More: " 더 ", Yes: "[x] 예", No: "[ ] 아니요", None: "(없음)", Mismatch: "불일치", Type: "%s 입력: "}
+	f := &Form{Title: "폼", T: &ko, Fields: []*Field{ToggleField("켜기", false), ChoiceField("고르기", nil, 0)}}
+	s := NewScreen(80, 24)
+	f.Draw(s, Style{})
+	for _, want := range []string{"[ ] 아니요", "(없음)", " 이동 "} {
+		if !strings.Contains(s.Text(), want) {
+			t.Fatalf("form text %q missing\n%s", want, s.Text())
+		}
+	}
+	typed.T = &ko
+	typed.Input.SetValue("x")
+	typed.Handle(KeyEvent(KeyEnter))
+	s.Clear()
+	typed.Draw(s, Style{})
+	if !strings.Contains(s.Text(), "alice 입력:") || !strings.Contains(s.Text(), "불일치") || !strings.Contains(s.Text(), " 입력 확인 ") {
+		t.Fatalf("dialog texts\n%s", s.Text())
+	}
+}

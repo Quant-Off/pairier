@@ -22,7 +22,6 @@ const (
 	maxPath  = 4096
 	maxURL   = 2048
 	maxAAD   = 4096
-	noPeer   = "(none)"
 	symUsage = node.SymmetricUsage
 )
 
@@ -67,11 +66,11 @@ func (m *dialogModal) handle(a *app, ev tui.Event) {
 func (m *dialogModal) draw(s *tui.Screen) { m.d.Draw(s, plain) }
 
 func (a *app) form(title string, note []string, fields []*tui.Field, submit func(a *app, f *tui.Form) error) {
-	a.modal = &formModal{f: &tui.Form{Title: title, Note: note, Fields: fields}, submit: submit}
+	a.modal = &formModal{f: &tui.Form{Title: title, Note: note, Fields: fields, T: a.texts}, submit: submit}
 }
 
 func (a *app) message(title string, lines []string, isErr bool) {
-	a.modal = &dialogModal{d: &tui.Dialog{Title: title, Lines: lines, Danger: isErr}}
+	a.modal = &dialogModal{d: &tui.Dialog{Title: title, Lines: lines, Danger: isErr, T: a.texts}}
 }
 
 func (a *app) notify(title string, lines []string, isErr bool) {
@@ -81,48 +80,48 @@ func (a *app) notify(title string, lines []string, isErr bool) {
 }
 
 func (a *app) confirm(title string, lines []string, typed string, danger bool, yes func(a *app)) {
-	a.modal = &dialogModal{d: &tui.Dialog{Title: title, Lines: lines, Ask: true, Confirm: typed, Danger: danger}, yes: yes}
+	a.modal = &dialogModal{d: &tui.Dialog{Title: title, Lines: lines, Ask: true, Confirm: typed, Danger: danger, T: a.texts}, yes: yes}
 }
 
-func inPath(v string) (string, error) {
+func (a *app) inPath(v string) (string, error) {
 	p := expandPath(v)
 	if p == "" {
-		return "", errors.New("an input file is required")
+		return "", errors.New(a.t("an input file is required"))
 	}
 	fi, err := os.Stat(p)
 	if err != nil {
 		return "", err
 	}
 	if !fi.Mode().IsRegular() {
-		return "", fmt.Errorf("%s is not a regular file", p)
+		return "", errors.New(a.tf("%s is not a regular file", p))
 	}
 	if fi.Size() > maxInput {
-		return "", fmt.Errorf("%s exceeds %d bytes", p, maxInput)
+		return "", errors.New(a.tf("%s exceeds %d bytes", p, maxInput))
 	}
 	return p, nil
 }
 
-func outPath(v string) (string, error) {
+func (a *app) outPath(v string) (string, error) {
 	p := expandPath(v)
 	if p == "" {
-		return "", errors.New("an output file is required")
+		return "", errors.New(a.t("an output file is required"))
 	}
 	if _, err := os.Lstat(p); err == nil {
-		return "", fmt.Errorf("%s already exists, choose another name", p)
+		return "", errors.New(a.tf("%s already exists, choose another name", p))
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
 	return p, nil
 }
 
-func checkURL(v string) (string, error) {
+func (a *app) checkURL(v string) (string, error) {
 	v = strings.TrimRight(strings.TrimSpace(v), "/")
 	if !strings.HasPrefix(v, "https://") {
-		return "", errors.New("the url must use https")
+		return "", errors.New(a.t("the url must use https"))
 	}
 	u, err := url.Parse(v)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", errors.New("the url must look like https://HOST:PORT")
+		return "", errors.New(a.t("the url must look like https://HOST:PORT"))
 	}
 	return v, nil
 }
@@ -139,25 +138,12 @@ func usageField(label string, allowed, defaults uint32) *tui.Field {
 	return tui.FlagsField(label, names, checked)
 }
 
-func usageBits(f *tui.Field) (uint32, error) {
+func (a *app) usageBits(f *tui.Field) (uint32, error) {
 	sel := f.Selected()
 	if len(sel) == 0 {
-		return 0, errors.New("choose at least one usage")
+		return 0, errors.New(a.t("choose at least one usage"))
 	}
 	return wire.ParseUsage(strings.Join(sel, ","))
-}
-
-func fpLines(label, fp string) []string {
-	pad := strings.Repeat(" ", len(label))
-	var out []string
-	for i, part := range splitFingerprint(fp) {
-		if i == 0 {
-			out = append(out, label+part)
-		} else {
-			out = append(out, pad+part)
-		}
-	}
-	return out
 }
 
 func shortID(id string) string {
@@ -185,7 +171,7 @@ func (a *app) runOpen(title string, open func(ctx context.Context) (*node.Node, 
 		res.apply = func(a *app) {
 			a.node, a.info, a.phase = n, info, phaseMain
 			a.data, a.verify = snapshot{}, nil
-			a.done("opened " + a.dir + " as " + info.member)
+			a.done(a.tf("opened %s as %s", a.dir, info.member))
 			a.refresh()
 			if after != nil {
 				after(a, info)
@@ -199,16 +185,16 @@ func (a *app) runOpen(title string, open func(ctx context.Context) (*node.Node, 
 func (a *app) openNode(dir string) {
 	opts := a.nodeOptions(dir)
 	a.dir = dir
-	a.runOpen("open node", func(ctx context.Context) (*node.Node, error) { return node.Open(ctx, opts) }, nil)
+	a.runOpen(a.t("open node"), func(ctx context.Context) (*node.Node, error) { return node.Open(ctx, opts) }, nil)
 }
 
 func (a *app) dirForm(dir string) {
-	a.form("Open node", []string{"Enter the node directory. If it does not exist yet you can initialize it next."},
-		[]*tui.Field{tui.TextField("Directory", dir, maxPath)},
+	a.form(a.t("Open node"), []string{a.t("Enter the node directory. If it does not exist yet you can initialize it next.")},
+		[]*tui.Field{tui.TextField(a.t("Directory"), dir, maxPath)},
 		func(a *app, f *tui.Form) error {
 			d := expandPath(f.Fields[0].Value())
 			if d == "" {
-				return errors.New("a directory is required")
+				return errors.New(a.t("a directory is required"))
 			}
 			if _, err := os.Stat(d); errors.Is(err, os.ErrNotExist) {
 				a.initForm(d)
@@ -223,37 +209,37 @@ func (a *app) dirForm(dir string) {
 
 func (a *app) initForm(dir string) {
 	fields := []*tui.Field{
-		tui.TextField("Directory", dir, maxPath),
-		tui.TextField("Member ID", "", exchange.MaxMemberID),
-		tui.ToggleField("Post-quantum", false),
+		tui.TextField(a.t("Directory"), dir, maxPath),
+		tui.TextField(a.t("Member ID"), "", exchange.MaxMemberID),
+		tui.ToggleField(a.t("Post-quantum"), false),
 	}
-	fields[1].Hint = "lowercase letters, digits, . _ -, the name members know you by"
-	fields[2].Hint = "ML-DSA identity and ML-KEM exchange, needs a core built with pqc"
-	note := []string{"Creates the directory for your user only, a root key and the node identity (kmsctl init)."}
-	a.form("Initialize node", note, fields, func(a *app, f *tui.Form) error {
+	fields[1].Hint = a.t("lowercase letters, digits, . _ -, the name members know you by")
+	fields[2].Hint = a.t("ML-DSA identity and ML-KEM exchange, needs a core built with pqc")
+	note := []string{a.t("Creates the directory for your user only, a root key and the node identity (kmsctl init).")}
+	a.form(a.t("Initialize node"), note, fields, func(a *app, f *tui.Form) error {
 		d := expandPath(f.Fields[0].Value())
 		id := strings.TrimSpace(f.Fields[1].Value())
 		pqc := f.Fields[2].On
 		if d == "" {
-			return errors.New("a directory is required")
+			return errors.New(a.t("a directory is required"))
 		}
 		if !exchange.ValidMemberID(id) {
-			return errors.New("invalid member id")
+			return errors.New(a.t("invalid member id"))
 		}
 		opts := a.nodeOptions(d)
 		a.dir = d
-		a.runOpen("initialize node", func(ctx context.Context) (*node.Node, error) {
+		a.runOpen(a.t("initialize node"), func(ctx context.Context) (*node.Node, error) {
 			return node.Init(ctx, opts, id, pqc)
 		}, func(a *app, info nodeInfo) {
 			lines := []string{
-				"member       " + info.member,
-				"identity     " + wire.AlgName(info.identityAlg),
-				"kem          " + wire.AlgName(info.kemAlg),
-				fmt.Sprintf("core_fips    %v   pqc %v", info.coreFIPS, info.pqc),
+				a.kv("member", info.member),
+				a.kv("identity", wire.AlgName(info.identityAlg)),
+				a.kv("kem", wire.AlgName(info.kemAlg)),
+				a.kv("core_fips", fmt.Sprintf("%v   pqc %v", info.coreFIPS, info.pqc)),
 			}
-			lines = append(lines, fpLines("fingerprint  ", info.fingerprint)...)
-			lines = append(lines, "", "Export your card with c and give the card and this fingerprint to each member over separate channels.")
-			a.message("Node initialized", lines, false)
+			lines = append(lines, a.fpLines(info.fingerprint)...)
+			lines = append(lines, "", a.t("Export your card with c and give the card and this fingerprint to each member over separate channels."))
+			a.message(a.t("Node initialized"), lines, false)
 		})
 		return nil
 	})
@@ -261,7 +247,7 @@ func (a *app) initForm(dir string) {
 
 func (a *app) filterForm() {
 	tab := a.tab
-	a.form("Filter "+tabNames[tab], nil, []*tui.Field{tui.TextField("Contains", a.filter[tab], 128)}, func(a *app, f *tui.Form) error {
+	a.form(a.tf("Filter %s", a.t(tabNames[tab])), nil, []*tui.Field{tui.TextField(a.t("Contains"), a.filter[tab], 128)}, func(a *app, f *tui.Form) error {
 		a.filter[tab] = strings.TrimSpace(f.Fields[0].Value())
 		a.lists[tab] = tui.List{}
 		a.selID[tab] = ""
@@ -279,12 +265,12 @@ func (a *app) nodeKey(ev tui.Event) {
 }
 
 func (a *app) cardForm(raw []byte, name string, note []string) {
-	a.form("Export card", note, []*tui.Field{tui.TextField("Output file", name, maxPath)}, func(a *app, f *tui.Form) error {
-		out, err := outPath(f.Fields[0].Value())
+	a.form(a.t("Export card"), note, []*tui.Field{tui.TextField(a.t("Output file"), name, maxPath)}, func(a *app, f *tui.Form) error {
+		out, err := a.outPath(f.Fields[0].Value())
 		if err != nil {
 			return err
 		}
-		a.run("export card", func(ctx context.Context, n *node.Node) (func(*app), error) {
+		a.run(a.t("export card"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 			var card *exchange.Card
 			var err error
 			data := raw
@@ -304,10 +290,10 @@ func (a *app) cardForm(raw []byte, name string, note []string) {
 				return nil, err
 			}
 			return func(a *app) {
-				a.done("card written to " + out)
-				lines := append([]string{"file         " + out}, fpLines("fingerprint  ", fp)...)
-				lines = append(lines, "", "Send the card file and read the fingerprint to the member over a different channel.")
-				a.notify("Card exported", lines, false)
+				a.done(a.tf("card written to %s", out))
+				lines := append([]string{a.kv("file", out)}, a.fpLines(fp)...)
+				lines = append(lines, "", a.t("Send the card file and read the fingerprint to the member over a different channel."))
+				a.notify(a.t("Card exported"), lines, false)
 			}, nil
 		})
 		return nil
@@ -317,11 +303,11 @@ func (a *app) cardForm(raw []byte, name string, note []string) {
 func (a *app) renewDialog() {
 	member := a.info.member
 	lines := []string{
-		"Renewing replaces the node KEM key, moves the TLS key into the core and signs a new card.",
-		"Every member has to add the new card with its new fingerprint, and kmsd must be restarted.",
+		a.t("Renewing replaces the node KEM key, moves the TLS key into the core and signs a new card."),
+		a.t("Every member has to add the new card with its new fingerprint, and kmsd must be restarted."),
 	}
-	a.confirm("Renew card", lines, member, true, func(a *app) {
-		a.run("renew card", func(ctx context.Context, n *node.Node) (func(*app), error) {
+	a.confirm(a.t("Renew card"), lines, member, true, func(a *app) {
+		a.run(a.t("renew card"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 			card, raw, err := n.RenewCard(ctx)
 			if err != nil {
 				return nil, err
@@ -333,10 +319,10 @@ func (a *app) renewDialog() {
 			}
 			return func(a *app) {
 				a.info = info
-				a.done("card renewed, new fingerprint " + fp)
+				a.done(a.tf("card renewed, new fingerprint %s", fp))
 				a.cardForm(raw, member+".renewed.card", []string{
-					"New fingerprint " + fp,
-					"Send the new card to every member and restart kmsd. Esc skips, c exports the card later.",
+					a.tf("New fingerprint %s", fp),
+					a.t("Send the new card to every member and restart kmsd. Esc skips, c exports the card later."),
 				})
 				a.refresh()
 			}, nil
@@ -373,27 +359,27 @@ func (a *app) keysKey(ev tui.Event) {
 
 func (a *app) genForm() {
 	fields := []*tui.Field{
-		tui.TextField("Label", "", wire.MaxLabel),
-		usageField("Usage", symUsage, wire.UsageEncrypt|wire.UsageDecrypt|wire.UsageExport),
+		tui.TextField(a.t("Label"), "", wire.MaxLabel),
+		usageField(a.t("Usage"), symUsage, wire.UsageEncrypt|wire.UsageDecrypt|wire.UsageExport),
 	}
-	fields[1].Hint = "export is needed to send the key to members"
-	a.form("Generate key", []string{"Creates an AES-256-GCM key inside the core (key gen)."}, fields, func(a *app, f *tui.Form) error {
+	fields[1].Hint = a.t("export is needed to send the key to members")
+	a.form(a.t("Generate key"), []string{a.t("Creates an AES-256-GCM key inside the core (key gen).")}, fields, func(a *app, f *tui.Form) error {
 		label := f.Fields[0].Value()
 		if !node.ValidLabel(label) {
 			return node.ErrLabel
 		}
-		bits, err := usageBits(f.Fields[1])
+		bits, err := a.usageBits(f.Fields[1])
 		if err != nil {
 			return err
 		}
-		a.run("generate key", func(ctx context.Context, n *node.Node) (func(*app), error) {
+		a.run(a.t("generate key"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 			rec, err := n.GenerateKey(ctx, label, bits)
 			if err != nil {
 				return nil, err
 			}
 			return func(a *app) {
 				a.selID[tabKeys] = rec.KeyID
-				a.done("generated " + rec.KeyID + " " + rec.Label)
+				a.done(a.tf("generated %s %s", rec.KeyID, rec.Label))
 				a.refresh()
 			}, nil
 		})
@@ -401,28 +387,28 @@ func (a *app) genForm() {
 	})
 }
 
-func keyLines(k *store.KeyRecord) []string {
+func (a *app) keyLines(k *store.KeyRecord) []string {
 	lines := []string{
-		"id       " + k.KeyID,
-		"alg      " + wire.AlgName(k.Alg),
-		"usage    " + wire.FormatUsage(k.Usage),
-		"label    " + k.Label,
-		"created  " + stamp(k.CreatedAt),
+		a.kv("id", k.KeyID),
+		a.kv("alg", wire.AlgName(k.Alg)),
+		a.kv("usage", wire.FormatUsage(k.Usage)),
+		a.kv("label", k.Label),
+		a.kv("created", stamp(k.CreatedAt)),
 	}
 	if k.Origin != nil {
-		lines = append(lines, "origin   "+k.Origin.Sender+"   sent "+stamp(k.Origin.SentAt))
+		lines = append(lines, a.kv("origin", a.tf("%s   sent %s", k.Origin.Sender, stamp(k.Origin.SentAt))))
 	}
 	return lines
 }
 
 func (a *app) keyInfo(id string) {
-	a.run("key info", func(ctx context.Context, n *node.Node) (func(*app), error) {
+	a.run(a.t("key info"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 		k, err := n.Key(ctx, id)
 		if err != nil {
 			return nil, err
 		}
 		return func(a *app) {
-			a.notify("Key", append(keyLines(k), "", "The stored metadata matches what the core reports for this key."), false)
+			a.notify(a.t("Key"), append(a.keyLines(k), "", a.t("The stored metadata matches what the core reports for this key.")), false)
 		}, nil
 	})
 }
@@ -430,57 +416,59 @@ func (a *app) keyInfo(id string) {
 func (a *app) sendForm(k *store.KeyRecord, push bool) {
 	members := a.memberIDs()
 	if len(members) == 0 {
-		a.message("No members", []string{"Add the recipient on the Members tab first."}, true)
+		a.message(a.t("No members"), []string{a.t("Add the recipient on the Members tab first.")}, true)
 		return
 	}
 	def := uint32(wire.UsageDecrypt)
 	if k.Usage&def == 0 {
 		def = 0
 	}
-	fields := []*tui.Field{tui.ChoiceField("Recipient", members, 0), usageField("Grant", k.Usage, def)}
-	fields[0].Hint = "Left/Right picks a registered member"
-	fields[1].Hint = "only a subset of this key's usage can be granted"
-	title, note := "Send key to file", []string{"Seals the key for one member into an envelope file (key send)."}
+	fields := []*tui.Field{tui.ChoiceField(a.t("Recipient"), members, 0), usageField(a.t("Grant"), k.Usage, def)}
+	fields[0].Hint = a.t("Left/Right picks a registered member")
+	fields[1].Hint = a.t("only a subset of this key's usage can be granted")
+	title, job := a.t("Send key to file"), a.t("send key")
+	note := []string{a.t("Seals the key for one member into an envelope file (key send).")}
 	if push {
 		u := a.urls[members[0]]
 		if u == "" {
 			u = "https://"
 		}
-		fields = append(fields, tui.TextField("kmsd URL", u, maxURL))
-		title, note = "Push key", []string{"Seals the key and delivers it to the member's kmsd over mutual TLS (key push)."}
+		fields = append(fields, tui.TextField(a.t("kmsd URL"), u, maxURL))
+		title, job = a.t("Push key"), a.t("push key")
+		note = []string{a.t("Seals the key and delivers it to the member's kmsd over mutual TLS (key push).")}
 	} else {
-		fields = append(fields, tui.TextField("Output file", shortID(k.KeyID)+".kxp", maxPath))
+		fields = append(fields, tui.TextField(a.t("Output file"), shortID(k.KeyID)+".kxp", maxPath))
 	}
 	id, label := k.KeyID, k.Label
 	a.form(title, note, fields, func(a *app, f *tui.Form) error {
 		to := f.Fields[0].Value()
-		bits, err := usageBits(f.Fields[1])
+		bits, err := a.usageBits(f.Fields[1])
 		if err != nil {
 			return err
 		}
 		var dest string
 		if push {
-			dest, err = checkURL(f.Fields[2].Value())
+			dest, err = a.checkURL(f.Fields[2].Value())
 		} else {
-			dest, err = outPath(f.Fields[2].Value())
+			dest, err = a.outPath(f.Fields[2].Value())
 		}
 		if err != nil {
 			return err
 		}
-		fp := "unknown"
+		fp := a.t("unknown")
 		if m := a.memberRecord(to); m != nil {
 			fp = m.fingerprint
 		}
-		lines := []string{"key          " + id + "  " + label, "recipient    " + to}
-		lines = append(lines, fpLines("fingerprint  ", fp)...)
-		lines = append(lines, "grant        "+wire.FormatUsage(bits))
+		lines := []string{a.kv("key", id+"  "+label), a.kv("recipient", to)}
+		lines = append(lines, a.fpLines(fp)...)
+		lines = append(lines, a.kv("grant", wire.FormatUsage(bits)))
 		if push {
-			lines = append(lines, "kmsd         "+dest)
+			lines = append(lines, a.kv("kmsd", dest))
 		} else {
-			lines = append(lines, "file         "+dest)
+			lines = append(lines, a.kv("file", dest))
 		}
-		a.confirm(title, append(lines, "", "The recipient can use the key with this usage from now on. Continue?"), "", false, func(a *app) {
-			a.run(strings.ToLower(title), func(ctx context.Context, n *node.Node) (func(*app), error) {
+		a.confirm(title, append(lines, "", a.t("The recipient can use the key with this usage from now on. Continue?")), "", false, func(a *app) {
+			a.run(job, func(ctx context.Context, n *node.Node) (func(*app), error) {
 				env, err := n.Send(ctx, id, to, bits)
 				if err != nil {
 					return nil, err
@@ -490,8 +478,8 @@ func (a *app) sendForm(k *store.KeyRecord, push bool) {
 						return nil, err
 					}
 					return func(a *app) {
-						a.done("sent " + id + " to " + to + " in " + dest)
-						a.notify("Envelope written", []string{"file " + dest, "Deliver it to " + to + ", who imports it with r on the Keys tab or key receive."}, false)
+						a.done(a.tf("sent %s to %s in %s", id, to, dest))
+						a.notify(a.t("Envelope written"), []string{a.kv("file", dest), a.tf("Deliver it to %s, who imports it with r on the Keys tab or key receive.", to)}, false)
 						a.refresh()
 					}, nil
 				}
@@ -501,8 +489,8 @@ func (a *app) sendForm(k *store.KeyRecord, push bool) {
 				}
 				return func(a *app) {
 					a.urls[to] = dest
-					a.done("pushed " + id + " to " + to + ", envelope " + envID)
-					a.notify("Key pushed", []string{"envelope " + envID, to + " accepts it from the Inbox tab or with inbox accept."}, false)
+					a.done(a.tf("pushed %s to %s, envelope %s", id, to, envID))
+					a.notify(a.t("Key pushed"), []string{a.kv("envelope", envID), a.tf("%s accepts it from the Inbox tab or with inbox accept.", to)}, false)
 					a.refresh()
 				}, nil
 			})
@@ -512,22 +500,22 @@ func (a *app) sendForm(k *store.KeyRecord, push bool) {
 }
 
 func (a *app) cryptForm(k *store.KeyRecord, encrypt bool) {
-	title, hint, op := "Decrypt file", "empty means the input name without .enc, or with .dec", "decrypt"
-	note := []string{"The plaintext is written only to a new file that only your user can read. It is never shown."}
+	title, hint, job := a.t("Decrypt file"), a.t("empty means the input name without .enc, or with .dec"), a.t("decrypt")
+	note := []string{a.t("The plaintext is written only to a new file that only your user can read. It is never shown.")}
 	if encrypt {
-		title, hint, op = "Encrypt file", "empty means the input name with .enc", "encrypt"
-		note = []string{"Encrypts up to 1 MiB with AES-256-GCM inside the core."}
+		title, hint, job = a.t("Encrypt file"), a.t("empty means the input name with .enc"), a.t("encrypt")
+		note = []string{a.t("Encrypts up to 1 MiB with AES-256-GCM inside the core.")}
 	}
 	fields := []*tui.Field{
-		tui.TextField("Input file", "", maxPath),
-		tui.TextField("Output file", "", maxPath),
-		tui.TextField("AAD", "", maxAAD),
+		tui.TextField(a.t("Input file"), "", maxPath),
+		tui.TextField(a.t("Output file"), "", maxPath),
+		tui.TextField(a.t("AAD"), "", maxAAD),
 	}
 	fields[1].Hint = hint
-	fields[2].Hint = "associated data, must be the same for encrypt and decrypt"
+	fields[2].Hint = a.t("associated data, must be the same for encrypt and decrypt")
 	id := k.KeyID
-	a.form(title+" with "+shortID(id), note, fields, func(a *app, f *tui.Form) error {
-		in, err := inPath(f.Fields[0].Value())
+	a.form(a.tf("%s with %s", title, shortID(id)), note, fields, func(a *app, f *tui.Form) error {
+		in, err := a.inPath(f.Fields[0].Value())
 		if err != nil {
 			return err
 		}
@@ -542,12 +530,12 @@ func (a *app) cryptForm(k *store.KeyRecord, encrypt bool) {
 				outName = in + ".dec"
 			}
 		}
-		out, err := outPath(outName)
+		out, err := a.outPath(outName)
 		if err != nil {
 			return err
 		}
 		aad := []byte(f.Fields[2].Value())
-		a.run(op, func(ctx context.Context, n *node.Node) (func(*app), error) {
+		a.run(job, func(ctx context.Context, n *node.Node) (func(*app), error) {
 			data, err := fsx.ReadFileLimited(in, maxInput)
 			if err != nil {
 				return nil, err
@@ -571,8 +559,9 @@ func (a *app) cryptForm(k *store.KeyRecord, encrypt bool) {
 				return nil, werr
 			}
 			return func(a *app) {
-				a.done(fmt.Sprintf("%s wrote %d bytes to %s", op, size, out))
-				a.notify(title, []string{fmt.Sprintf("wrote %d bytes to %s", size, out)}, false)
+				msg := a.tf("wrote %d bytes to %s", size, out)
+				a.done(job + ": " + msg)
+				a.notify(title, []string{msg}, false)
 			}, nil
 		})
 		return nil
@@ -580,14 +569,14 @@ func (a *app) cryptForm(k *store.KeyRecord, encrypt bool) {
 }
 
 func (a *app) receiveForm() {
-	fields := []*tui.Field{tui.TextField("Envelope file", "", maxPath)}
-	note := []string{"Imports a key sent to this node after checking the signature, recipient and context (key receive)."}
-	a.form("Receive key", note, fields, func(a *app, f *tui.Form) error {
-		in, err := inPath(f.Fields[0].Value())
+	fields := []*tui.Field{tui.TextField(a.t("Envelope file"), "", maxPath)}
+	note := []string{a.t("Imports a key sent to this node after checking the signature, recipient and context (key receive).")}
+	a.form(a.t("Receive key"), note, fields, func(a *app, f *tui.Form) error {
+		in, err := a.inPath(f.Fields[0].Value())
 		if err != nil {
 			return err
 		}
-		a.run("receive key", func(ctx context.Context, n *node.Node) (func(*app), error) {
+		a.run(a.t("receive key"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 			raw, err := fsx.ReadFileLimited(in, maxInput)
 			if err != nil {
 				return nil, err
@@ -598,8 +587,8 @@ func (a *app) receiveForm() {
 			}
 			return func(a *app) {
 				a.selID[tabKeys] = rec.KeyID
-				a.done("received " + rec.KeyID + " from " + rec.Origin.Sender)
-				a.notify("Key received", keyLines(rec), false)
+				a.done(a.tf("received %s from %s", rec.KeyID, rec.Origin.Sender))
+				a.notify(a.t("Key received"), a.keyLines(rec), false)
 				a.refresh()
 			}, nil
 		})
@@ -626,24 +615,24 @@ func (a *app) membersKey(ev tui.Event) {
 
 func (a *app) addForm() {
 	fields := []*tui.Field{
-		tui.TextField("Card file", "", maxPath),
-		tui.TextField("Fingerprint", "", 256),
+		tui.TextField(a.t("Card file"), "", maxPath),
+		tui.TextField(a.t("Fingerprint"), "", 256),
 	}
-	fields[1].Hint = "as the member read it to you, never copied from the card file"
+	fields[1].Hint = a.t("as the member read it to you, never copied from the card file")
 	note := []string{
-		"Registers or updates a member (member add). Type or paste the fingerprint you got",
-		"over a separate channel, in person or by phone. It must match the card exactly.",
+		a.t("Registers or updates a member (member add). Type or paste the fingerprint you got"),
+		a.t("over a separate channel, in person or by phone. It must match the card exactly."),
 	}
-	a.form("Add member", note, fields, func(a *app, f *tui.Form) error {
-		in, err := inPath(f.Fields[0].Value())
+	a.form(a.t("Add member"), note, fields, func(a *app, f *tui.Form) error {
+		in, err := a.inPath(f.Fields[0].Value())
 		if err != nil {
 			return err
 		}
 		fp := strings.TrimSpace(f.Fields[1].Value())
 		if exchange.NormalizeFingerprint(fp) == "" {
-			return errors.New("the fingerprint is required")
+			return errors.New(a.t("the fingerprint is required"))
 		}
-		a.run("add member", func(ctx context.Context, n *node.Node) (func(*app), error) {
+		a.run(a.t("add member"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 			raw, err := fsx.ReadFileLimited(in, maxInput)
 			if err != nil {
 				return nil, err
@@ -652,14 +641,14 @@ func (a *app) addForm() {
 			if err != nil {
 				return nil, err
 			}
-			action := "added"
+			title, msg := a.t("Member added"), a.tf("added member %s", rec.MemberID)
 			if rec.UpdatedAt != 0 {
-				action = "updated"
+				title, msg = a.t("Member updated"), a.tf("updated member %s", rec.MemberID)
 			}
 			return func(a *app) {
 				a.selID[tabMembers] = rec.MemberID
-				a.done(action + " member " + rec.MemberID)
-				a.notify("Member "+action, append([]string{"member       " + rec.MemberID}, fpLines("fingerprint  ", rec.Fingerprint)...), false)
+				a.done(msg)
+				a.notify(title, append([]string{a.kv("member", rec.MemberID)}, a.fpLines(rec.Fingerprint)...), false)
 				a.refresh()
 			}, nil
 		})
@@ -668,14 +657,14 @@ func (a *app) addForm() {
 }
 
 func (a *app) witnessForm(member string) {
-	a.form("Export witnessed heads of "+member, []string{"Writes the audit heads this node saw from the member, one SEQ:HASH per line (member witness)."},
-		[]*tui.Field{tui.TextField("Output file", member+".witness", maxPath)},
+	a.form(a.tf("Export witnessed heads of %s", member), []string{a.t("Writes the audit heads this node saw from the member, one SEQ:HASH per line (member witness).")},
+		[]*tui.Field{tui.TextField(a.t("Output file"), member+".witness", maxPath)},
 		func(a *app, f *tui.Form) error {
-			out, err := outPath(f.Fields[0].Value())
+			out, err := a.outPath(f.Fields[0].Value())
 			if err != nil {
 				return err
 			}
-			a.run("export witnessed heads", func(ctx context.Context, n *node.Node) (func(*app), error) {
+			a.run(a.t("export witnessed heads"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 				heads, err := n.Witnessed(member)
 				if err != nil {
 					return nil, err
@@ -689,8 +678,8 @@ func (a *app) witnessForm(member string) {
 					return nil, err
 				}
 				return func(a *app) {
-					a.done(fmt.Sprintf("wrote %d witnessed heads for %s to %s", len(heads), member, out))
-					a.notify("Witnessed heads", []string{fmt.Sprintf("%d heads written to %s", len(heads), out), "The member verifies its log with them on the Audit tab or audit verify --anchor-file."}, false)
+					a.done(a.tf("wrote %d witnessed heads for %s to %s", len(heads), member, out))
+					a.notify(a.t("Witnessed heads"), []string{a.tf("%d heads written to %s", len(heads), out), a.t("The member verifies its log with them on the Audit tab or audit verify --anchor-file.")}, false)
 				}, nil
 			})
 			return nil
@@ -702,20 +691,20 @@ func (a *app) healthForm(member string) {
 	if u == "" {
 		u = "https://"
 	}
-	a.form("Health of "+member, []string{"Connects to the member's kmsd with mutual TLS pinned to its card (peer health)."},
-		[]*tui.Field{tui.TextField("kmsd URL", u, maxURL)},
+	a.form(a.tf("Health of %s", member), []string{a.t("Connects to the member's kmsd with mutual TLS pinned to its card (peer health).")},
+		[]*tui.Field{tui.TextField(a.t("kmsd URL"), u, maxURL)},
 		func(a *app, f *tui.Form) error {
-			dest, err := checkURL(f.Fields[0].Value())
+			dest, err := a.checkURL(f.Fields[0].Value())
 			if err != nil {
 				return err
 			}
-			a.run("peer health", func(ctx context.Context, n *node.Node) (func(*app), error) {
+			a.run(a.t("peer health"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 				if err := api.NewClient(n, nil).Health(ctx, dest, member); err != nil {
 					return nil, err
 				}
 				return func(a *app) {
 					a.urls[member] = dest
-					a.done("health ok " + member + " at " + dest)
+					a.done(a.tf("health ok %s at %s", member, dest))
 				}, nil
 			})
 			return nil
@@ -733,37 +722,37 @@ func (a *app) inboxKey(ev tui.Event) {
 	}
 	item := *it
 	from := item.Sender
-	fp := "not a registered member, accepting will fail"
+	fp := a.t("not a registered member, accepting will fail")
 	if m := a.memberRecord(from); m != nil {
 		fp = m.fingerprint
 	}
-	lines := []string{"envelope     " + item.ID, "from         " + from}
-	lines = append(lines, fpLines("fingerprint  ", fp)...)
-	lines = append(lines, "sent         "+stamp(item.SentAt), "received     "+stamp(item.ReceivedAt))
+	lines := []string{a.kv("envelope", item.ID), a.kv("from", from)}
+	lines = append(lines, a.fpLines(fp)...)
+	lines = append(lines, a.kv("sent", stamp(item.SentAt)), a.kv("received", stamp(item.ReceivedAt)))
 	switch {
 	case ev.Is(tui.KeyEnter), ev.IsRune('a'):
-		a.confirm("Accept envelope", append(lines, "", "The key is imported only if the signature, recipient and context verify. Accept?"), "", false, func(a *app) {
-			a.run("accept envelope", func(ctx context.Context, n *node.Node) (func(*app), error) {
+		a.confirm(a.t("Accept envelope"), append(lines, "", a.t("The key is imported only if the signature, recipient and context verify. Accept?")), "", false, func(a *app) {
+			a.run(a.t("accept envelope"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 				rec, err := n.Accept(ctx, item.ID)
 				if err != nil {
 					return nil, err
 				}
 				return func(a *app) {
 					a.selID[tabKeys] = rec.KeyID
-					a.done("accepted " + item.ID + ", key " + rec.KeyID)
-					a.notify("Key imported", keyLines(rec), false)
+					a.done(a.tf("accepted %s, key %s", item.ID, rec.KeyID))
+					a.notify(a.t("Key imported"), a.keyLines(rec), false)
 					a.refresh()
 				}, nil
 			})
 		})
 	case ev.IsRune('x'):
-		a.confirm("Reject envelope", append(lines, "", "The envelope is deleted. The sender has to send it again. Reject?"), "", true, func(a *app) {
-			a.run("reject envelope", func(ctx context.Context, n *node.Node) (func(*app), error) {
+		a.confirm(a.t("Reject envelope"), append(lines, "", a.t("The envelope is deleted. The sender has to send it again. Reject?")), "", true, func(a *app) {
+			a.run(a.t("reject envelope"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 				if err := n.Reject(ctx, item.ID); err != nil {
 					return nil, err
 				}
 				return func(a *app) {
-					a.done("rejected " + item.ID)
+					a.done(a.tf("rejected %s", item.ID))
 					a.refresh()
 				}, nil
 			})
@@ -785,37 +774,37 @@ func parseAnchors(s string) ([]audit.Anchor, error) {
 
 func (a *app) verifyForm() {
 	fields := []*tui.Field{
-		tui.TextField("Anchors", "", 8192),
-		tui.TextField("Anchor file", "", maxPath),
+		tui.TextField(a.t("Anchors"), "", 8192),
+		tui.TextField(a.t("Anchor file"), "", maxPath),
 	}
-	fields[0].Hint = "SEQ:HASH heads recorded out of band, separated by spaces"
-	fields[1].Hint = "one SEQ:HASH per line, for example a member witness file"
+	fields[0].Hint = a.t("SEQ:HASH heads recorded out of band, separated by spaces")
+	fields[1].Hint = a.t("one SEQ:HASH per line, for example a member witness file")
 	if !a.opts.Offline {
-		peers := append([]string{noPeer}, a.memberIDs()...)
-		fields = append(fields, tui.ChoiceField("Peer", peers, 0), tui.TextField("Peer kmsd URL", "https://", maxURL))
-		fields[2].Hint = "a member whose kmsd returns the heads it witnessed"
+		peers := append([]string{a.t("(none)")}, a.memberIDs()...)
+		fields = append(fields, tui.ChoiceField(a.t("Peer"), peers, 0), tui.TextField(a.t("Peer kmsd URL"), "https://", maxURL))
+		fields[2].Hint = a.t("a member whose kmsd returns the heads it witnessed")
 	}
-	note := []string{"Replays the hash chain and checkpoint signatures and checks every anchor (audit verify)."}
+	note := []string{a.t("Replays the hash chain and checkpoint signatures and checks every anchor (audit verify).")}
 	now := a.opts.now
-	a.form("Verify audit log", note, fields, func(a *app, f *tui.Form) error {
+	a.form(a.t("Verify audit log"), note, fields, func(a *app, f *tui.Form) error {
 		anchors, err := parseAnchors(f.Fields[0].Value())
 		if err != nil {
 			return err
 		}
 		var file string
 		if strings.TrimSpace(f.Fields[1].Value()) != "" {
-			if file, err = inPath(f.Fields[1].Value()); err != nil {
+			if file, err = a.inPath(f.Fields[1].Value()); err != nil {
 				return err
 			}
 		}
 		var peer, dest string
-		if len(f.Fields) > 2 && f.Fields[2].Value() != noPeer {
+		if len(f.Fields) > 2 && f.Fields[2].Index > 0 {
 			peer = f.Fields[2].Value()
-			if dest, err = checkURL(f.Fields[3].Value()); err != nil {
+			if dest, err = a.checkURL(f.Fields[3].Value()); err != nil {
 				return err
 			}
 		}
-		a.run("verify audit log", func(ctx context.Context, n *node.Node) (func(*app), error) {
+		a.run(a.t("verify audit log"), func(ctx context.Context, n *node.Node) (func(*app), error) {
 			if file != "" {
 				raw, err := fsx.ReadFileLimited(file, maxInput)
 				if err != nil {
@@ -842,19 +831,19 @@ func (a *app) verifyForm() {
 				}
 				if verr != nil {
 					a.verify = &verifyResult{err: verr.Error(), at: at}
-					a.flash("audit verification failed", true)
-					a.logs.add("audit verify failed: " + verr.Error())
-					a.notify("Audit verification failed", []string{verr.Error()}, true)
+					a.flash(a.t("audit verification failed"), true)
+					a.logs.add(a.t("audit verification failed") + ": " + verr.Error())
+					a.notify(a.t("Audit verification failed"), []string{verr.Error()}, true)
 					return
 				}
 				a.verify = &verifyResult{count: count, head: head, anchors: len(anchors), peer: peer, at: at}
-				a.done(fmt.Sprintf("audit verified %d entries, head %s", count, head))
-				a.notify("Audit log verified", []string{
-					fmt.Sprintf("entries  %d", count),
-					"head     " + head.String(),
-					fmt.Sprintf("anchors  %d", len(anchors)),
+				a.done(a.tf("audit verified %d entries, head %s", count, head))
+				a.notify(a.t("Audit log verified"), []string{
+					a.kv("entries", fmt.Sprint(count)),
+					a.kv("head", head.String()),
+					a.kv("anchors", fmt.Sprint(len(anchors))),
 					"",
-					"Record the head somewhere the node cannot change to catch a later rollback.",
+					a.t("Record the head somewhere the node cannot change to catch a later rollback."),
 				}, false)
 				a.refresh()
 			}, nil
