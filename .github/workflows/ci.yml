@@ -125,6 +125,7 @@ jobs:
           cd host
           go test -run='^$' -fuzz=FuzzDecodeHeader -fuzztime=20s ./internal/wire/
           go test -run='^$' -fuzz=FuzzDecodeBody -fuzztime=20s ./internal/wire/
+          go test -run='^$' -fuzz=FuzzDecoder -fuzztime=20s ./internal/tui/
 
   host-windows:
     env:
