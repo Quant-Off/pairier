@@ -42,6 +42,26 @@ func TestUsageAndVersion(t *testing.T) {
 	}
 }
 
+func TestUIRequiresATerminal(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"ui"}, nil, &out, &errb); code != 2 || !strings.Contains(errb.String(), "interactive terminal") {
+		t.Fatalf("ui without a terminal: %d %q", code, errb.String())
+	}
+	errb.Reset()
+	if code := run([]string{"ui", "--idle", "-1s"}, nil, &out, &errb); code != 2 {
+		t.Fatalf("negative idle accepted: %d %q", code, errb.String())
+	}
+	f, err := os.Create(filepath.Join(t.TempDir(), "plain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	errb.Reset()
+	if code := run([]string{"ui"}, f, f, &errb); code != 2 || !strings.Contains(errb.String(), "interactive terminal") {
+		t.Fatalf("ui on a regular file: %d %q", code, errb.String())
+	}
+}
+
 func TestGlobalFlagsAfterCommand(t *testing.T) {
 	t.Setenv("KMS_DIR", "")
 	t.Setenv("KMS_CORE", "")

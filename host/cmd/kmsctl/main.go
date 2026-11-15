@@ -8,15 +8,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Quant-Off/pairier/host/internal/api"
 	"github.com/Quant-Off/pairier/host/internal/audit"
+	"github.com/Quant-Off/pairier/host/internal/console"
 	"github.com/Quant-Off/pairier/host/internal/fsx"
 	"github.com/Quant-Off/pairier/host/internal/node"
+	"github.com/Quant-Off/pairier/host/internal/term"
 	"github.com/Quant-Off/pairier/host/internal/wire"
 )
 
@@ -44,6 +48,7 @@ commands:
   audit verify [--anchor SEQ:HASH]... [--anchor-file FILE] [--peer MEMBER --url https://HOST:PORT]
   encrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
   decrypt --id KEYID [--in FILE] [--out FILE] [--aad STRING]
+  ui [--offline] [--idle DURATION]
   version
 `
 
@@ -169,6 +174,8 @@ func (c *cli) dispatch(args []string) (int, error) {
 		return c.cmdCrypt(ctx, args[1:], true)
 	case "decrypt":
 		return c.cmdCrypt(ctx, args[1:], false)
+	case "ui":
+		return c.cmdUI(ctx, args[1:])
 	}
 	fmt.Fprint(c.stderr, usageText)
 	return 2, fmt.Errorf("unknown command %q", args[0])
@@ -184,23 +191,67 @@ func (c *cli) flags(name string) *flag.FlagSet {
 	return fs
 }
 
+func (c *cli) coreBinary() string {
+	if c.core != "" {
+		return c.core
+	}
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "kms-core"+fsx.ExeSuffix)
+	}
+	return ""
+}
+
 func (c *cli) options() (node.Options, error) {
 	if c.dir == "" {
 		return node.Options{}, errNoDir
 	}
-	core := c.core
-	if core == "" {
-		if exe, err := os.Executable(); err == nil {
-			core = filepath.Join(filepath.Dir(exe), "kms-core"+fsx.ExeSuffix)
-		}
-	}
 	return node.Options{
 		Dir:                 c.dir,
-		CoreBinary:          core,
+		CoreBinary:          c.coreBinary(),
 		AllowUnlockedMemory: c.allowUnlocked,
 		Timeout:             c.timeout,
 		Stderr:              c.stderr,
 	}, nil
+}
+
+func (c *cli) cmdUI(ctx context.Context, args []string) (int, error) {
+	fs := c.flags("ui")
+	offline := fs.Bool("offline", false, "hide actions that contact other nodes (push, health, peer audit)")
+	idle := fs.Duration("idle", 10*time.Minute, "close the node after this long without input, 0 keeps it open")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *idle < 0 {
+		return 2, errors.New("ui: usage: ui [--offline] [--idle DURATION]")
+	}
+	if runtime.GOOS != "windows" && os.Getenv("TERM") == "dumb" {
+		return 2, errors.New("ui: TERM=dumb cannot show the terminal ui, use the commands instead")
+	}
+	in, inOK := c.stdin.(*os.File)
+	out, outOK := c.stdout.(*os.File)
+	if !inOK || !outOK {
+		return 2, fmt.Errorf("ui: %w", term.ErrNotTerminal)
+	}
+	tty, err := term.Open(in, out)
+	if err != nil {
+		return 2, fmt.Errorf("ui: %w", err)
+	}
+	defer tty.Close()
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	err = console.Run(ctx, tty, console.Options{
+		Node: node.Options{
+			CoreBinary:          c.coreBinary(),
+			AllowUnlockedMemory: c.allowUnlocked,
+			Timeout:             c.timeout,
+		},
+		Dir:     c.dir,
+		Offline: *offline,
+		Idle:    *idle,
+		Version: version,
+		Color:   os.Getenv("NO_COLOR") == "",
+	})
+	if err != nil {
+		return 1, err
+	}
+	return 0, nil
 }
 
 func (c *cli) open(ctx context.Context) (*node.Node, error) {
