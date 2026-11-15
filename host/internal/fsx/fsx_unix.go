@@ -83,6 +83,10 @@ func OpenNoFollow(path string, flag int, perm fs.FileMode) (*os.File, error) {
 	return os.OpenFile(path, flag|syscall.O_NOFOLLOW, perm)
 }
 
+func CreatePrivate(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+}
+
 func Lock(f *os.File) error {
 	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
 }

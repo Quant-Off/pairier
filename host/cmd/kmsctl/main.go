@@ -749,23 +749,10 @@ func (c *cli) cmdCrypt(ctx context.Context, args []string, encrypt bool) (int, e
 const maxInput = 1 << 20
 
 func (c *cli) readIn(path string) ([]byte, error) {
-	var r io.Reader = c.stdin
 	if path != "" {
-		f, err := os.Open(path)
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		r = f
+		return fsx.ReadFileLimited(path, maxInput)
 	}
-	b, err := io.ReadAll(io.LimitReader(r, maxInput+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(b) > maxInput {
-		return nil, fmt.Errorf("input exceeds %d bytes", maxInput)
-	}
-	return b, nil
+	return fsx.ReadLimited(c.stdin, maxInput)
 }
 
 func (c *cli) writeOut(path string, data []byte) error {
@@ -773,19 +760,7 @@ func (c *cli) writeOut(path string, data []byte) error {
 		_, err := c.stdout.Write(data)
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	return f.Close()
+	return fsx.WriteNew(path, data)
 }
 
 func parseUsage(s string) (uint32, error) {
